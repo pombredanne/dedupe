@@ -302,6 +302,36 @@ class Dedupe:
 
         return clusters
 
+    def duplicateClustersII(self,
+                          candidates,
+                          pairwise_threshold = .5,
+                          cluster_threshold = .5):
+        """
+        Partitions blocked data and returns a list of clusters, where
+        each cluster is a tuple of record ids
+
+        Keyword arguments:
+        blocked_data --       Dictionary where the keys are blocking predicates 
+                              and the values are tuples of records covered by that 
+                              predicate.
+        pairwise_threshold -- Number between 0 and 1 (default is .5). We will only 
+                              consider as duplicates  ecord pairs as duplicates if 
+                              their estimated duplicate likelihood is greater than 
+                              the pairwise threshold. 
+        cluster_threshold --  Number between 0 and 1 (default is .5). Lowering the 
+                              number will increase precision, raising it will increase
+                              recall
+
+        """
+
+        self.dupes = core.scoreDuplicates(candidates, 
+                                          self.data_model,
+                                          pairwise_threshold)
+
+        clusters = clustering.hierarchical.cluster(self.dupes, cluster_threshold)
+
+        return clusters
+
     def _learnBlocking(self, data_d, eta, epsilon):
         confident_nonduplicates = blocking.semiSupervisedNonDuplicates(self.data_d,
                                                                        self.data_model)
@@ -407,7 +437,7 @@ class Dedupe:
 
     def _readSettings(self, file_name):
         with open(file_name, 'r') as f:
-            learned_settings = json.load(f)
+            learned_settings = json.loads(f.read(), object_hook=self._decode_dict)
 
         self.data_model = learned_settings['data model']
         self.predicates = []
@@ -450,19 +480,19 @@ class Dedupe:
         return training_pairs, training_data
 
     # json encoding fix for unicode => string
-    def _decode_list(data):
+    def _decode_list(self, data):
         rv = []
         for item in data:
             if isinstance(item, unicode):
                 item = item.encode('utf-8')
             elif isinstance(item, list):
-                item = _decode_list(item)
+                item = self._decode_list(item)
             elif isinstance(item, dict):
-                item = _decode_dict(item)
+                item = self._decode_dict(item)
             rv.append(item)
         return rv
 
-    def _decode_dict(data):
+    def _decode_dict(self, data):
         rv = {}
         for key, value in data.iteritems():
             if isinstance(key, unicode):
@@ -470,8 +500,8 @@ class Dedupe:
             if isinstance(value, unicode):
                value = value.encode('utf-8')
             elif isinstance(value, list):
-               value = _decode_list(value)
+               value = self._decode_list(value)
             elif isinstance(value, dict):
-               value = _decode_dict(value)
+               value = self._decode_dict(value)
             rv[key] = value
         return rv

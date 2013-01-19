@@ -5,7 +5,7 @@ import lr
 from affinegap import normalizedAffineGapDistance as stringDistance
 import numpy
 import json
-from itertools import izip
+import itertools
 
 def sampleDict(d, sample_size):
 
@@ -34,7 +34,6 @@ def trainModel(training_data, data_model, alpha=.001):
 
     return data_model
 
-#@profile
 def recordDistances(candidates, data_model):
 
   # The record array has two elements, the first element is an array
@@ -42,39 +41,46 @@ def recordDistances(candidates, data_model):
   # argument is an array of length 2 which stores the id of the
   # considered elements in the pair.
 
+
+
     fields = data_model['fields']
 
     field_dtype = [('names', 'a20', len(fields)), ('values', 'f4',
                    len(fields))]
 
-    record_dtype = [('pairs', [('pair1', 'i4'), ('pair2', 'i4')]),
+    record_dtype = [('pairs', 'i4', 2),
                     ('field_distances', field_dtype)]
 
-    record_distances = numpy.zeros(len(candidates), dtype=record_dtype)
-    
 
-    key_pairs = []
-    record_pairs = []
+    candidates_1, candidates_2 = itertools.tee(candidates, 2)
 
-
-    [(key_pairs.append((candidate_1[0],
-                        candidate_2[0])),
-      record_pairs.append((candidate_1[1],
-                           candidate_2[1])))
-      for candidate_1, candidate_2 in candidates]
+    key_pairs = (candidate[0]
+                 for candidate_pair in candidates_1
+                 for candidate in candidate_pair)
 
 
-    record_distances = buildRecordDistances(record_pairs, fields, record_distances)
-    record_distances['pairs'] = list(key_pairs)
+
+    record_pairs = ((candidate_1[1], candidate_2[1])
+                     for candidate_1, candidate_2
+                     in candidates_2)
+
+
+
+
+    field_distances, n_candidates = buildRecordDistances(record_pairs,
+                                                         fields)
+                                                         
+
+    record_distances = numpy.zeros(n_candidates, dtype=record_dtype)
+
+    record_distances['pairs'] = numpy.fromiter(key_pairs, 'i4').reshape(n_candidates, 2)
+    record_distances['field_distances']['values'] = field_distances[0:n_candidates]
 
     return record_distances
 
-#@profile
-def buildRecordDistances(record_pairs, fields, record_distances) :
-  distances = numpy.zeros(1, dtype=record_distances['field_distances'].dtype)
-  distances = distances['values'][0]
-  
-  field_distances = record_distances['field_distances']['values']
+def buildRecordDistances(record_pairs, fields) :
+  n_fields = len(fields)
+
   sorted_fields = sorted(fields.keys())
   field_types = [fields[field]['type'] for field in sorted_fields]
 
@@ -92,8 +98,20 @@ def buildRecordDistances(record_pairs, fields, record_distances) :
   else :
     base_fields = sorted_fields
 
+
+
+
+
   if interactions :
+
+
+    field_distances = numpy.zeros((100000, n_fields)) 
+
+
     for (i, record_pair) in enumerate(record_pairs):
+      if i % 100000 == 0 :
+        field_distances = numpy.concatenate((field_distances,
+                                               numpy.zeros((100000, n_fields))))
       record_1, record_2 = record_pair
 
       field_distances[i] = [stringDistance(record_1[name], record_2[name]) for name in base_fields]
@@ -104,13 +122,18 @@ def buildRecordDistances(record_pairs, fields, record_distances) :
           value *= field_distances[i][k]
         field_distances[i][j] = value
   else :
-    for (i, record_pair) in enumerate(record_pairs):
-      record_1, record_2 = record_pair
+    field_distances = numpy.fromiter((stringDistance(record_pair[0][name],
+                                                     record_pair[1][name])
+                                      for record_pair in record_pairs
+                                      for name in base_fields),
+                                     'f4')
+    field_distances = field_distances.reshape(len(field_distances)/n_fields,
+                                              n_fields)
 
-      field_distances[i] = [stringDistance(record_1[name], record_2[name]) for name in base_fields]
+  i = field_distances.shape[0] - 1
+                                              
 
-  record_distances['field_distances']['values'] = field_distances
-  return record_distances
+  return (field_distances, i+1)
 
 def scorePairs(record_distances, data_model):
     fields = data_model['fields']
@@ -138,13 +161,16 @@ def scoreDuplicates(candidates,
     record_distances = recordDistances(candidates, data_model)
     duplicate_scores = scorePairs(record_distances, data_model)
 
-    pair_ids = [pair[0] for pair in record_distances]
+    score_dtype = [('pairs', 'i4', 2), ('score', 'f4', 1)]
+    scored_pairs = numpy.zeros(len(duplicate_scores),
+                               dtype=score_dtype)
 
-    scored_pairs = zip(pair_ids, duplicate_scores)
-    if threshold:
-        return [pair for pair in scored_pairs if pair[1] > threshold]
-    else:
-        return scored_pairs
+    scored_pairs['pairs'] = record_distances['pairs']
+    scored_pairs['score'] = duplicate_scores
+
+    scored_pairs = scored_pairs[scored_pairs['score'] > threshold]
+
+    return scored_pairs
 
 
 # define a data type for hashable dictionaries
