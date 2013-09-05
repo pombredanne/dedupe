@@ -1,5 +1,6 @@
 libdistance-0.2.1
 build
+docs
 *.pyc
 logfile
 *.*~
@@ -12,8 +13,11 @@ logfile
 *.*#
 *.json
 examples/output/*.*
-markelReceipts.txt
-illinois_contributions.db
+examples/csv_example/csv_example_output.csv
+examples/mysql_example/*.txt*
+*.db
 kernprof.py
 possible_classifiers
 .DS_Store
+mysql.cnf
+*settings

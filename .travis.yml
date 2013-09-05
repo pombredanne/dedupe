@@ -4,13 +4,18 @@ branches:
 
 language: python
 notifications:
-  email: false
+  email: 
+    on_success: change
+    on_failure: always
+  irc : "chat.freenode.net#dedupe"
+    
+  
 python:
   - "2.7"
   - "2.6"
 install:
-  - pip install --use-mirrors -q numpy
-  - pip install --use-mirrors -r requirements.txt
-  - python setup.py install
+  - if [ "$TRAVIS_PYTHON_VERSION" == "2.6" ]; then pip install --use-mirrors -r py26_requirements.txt; fi
+  - if [ "$TRAVIS_PYTHON_VERSION" == "2.7" ]; then pip install --use-mirrors -r requirements.txt; fi
+  - python setup.py develop
 # command to run tests, e.g. python setup.py test
-script: python test/test_dedupe.py
+script: nosetests

@@ -9,14 +9,21 @@ __all__ = ['affinegap',
            'training_sample',
            'crossvalidation',
            'dedupe',
+           'distance'
            ]
 
-import affinegap
+#from distance import affinegap
+from distance import affinegap
+import distance 
+import mekano
 import blocking
 import clustering
 import core
 import lr
 import predicates
-import training_sample
+import training
 import crossvalidation
-from dedupe import Dedupe
+from api import Dedupe
+from core import randomPairs
+from convenience import dataSample
+from convenience import blockData
