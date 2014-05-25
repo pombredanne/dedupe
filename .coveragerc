@@ -1,0 +1,3 @@
+[run]
+omit = dedupe/backport.py,dedupe/AsciiDammit.py
+source = dedupe

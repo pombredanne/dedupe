@@ -1,20 +1,37 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
-import collections
-import random
-import json
 import itertools
-import logging
-from itertools import count
 import warnings
-
 import numpy
+import collections
 
-import lr
-from dedupe.distance.affinegap import normalizedAffineGapDistance as stringDistance
+import dedupe.backport as backport
+import dedupe.lr as lr
 
-def randomPairs(n_records, sample_size, zero_indexed=True):
+def randomPairsWithReplacement(n_records, sample_size) :
+    # If the population is very large relative to the sample
+    # size than we'll get very few duplicates by chance
+    warnings.warn("There may be duplicates in the sample")
+
+    try :
+        random_indices = numpy.random.randint(n_records, 
+                                              size=sample_size*2)
+    except OverflowError:
+        max_int = numpy.iinfo('int').max
+        warnings.warn("Asked to sample pairs from %d records, will only sample pairs from first %d records" % (n_records, max_int))
+        random_indices = numpy.random.randint(max_int, 
+                                              size=sample_size*2)
+
+
+        
+    random_indices = random_indices.reshape((-1, 2))
+    random_indices.sort(axis=1)
+
+    return random_indices
+
+
+def randomPairs(n_records, sample_size):
     """
     Return random combinations of indices for a square matrix of size
     n records
@@ -24,35 +41,55 @@ def randomPairs(n_records, sample_size, zero_indexed=True):
         raise ValueError("Needs at least two records")
     n = n_records * (n_records - 1) / 2
 
+    # numpy doesn't always throw an overflow error so we need to 
+    # check to make sure that the largest number we'll use is smaller
+    # than the numpy's maximum unsigned integer
+    if 8 * n > numpy.iinfo('uint').max :
+        return randomPairsWithReplacement(n_records, sample_size)
+
     if sample_size >= n:
-        warnings.warn("Requested sample of size %d, only returning %d possible pairs" % (sample_size, n))
+        if sample_size > n :
+            warnings.warn("Requested sample of size %d, only returning %d possible pairs" % (sample_size, n))
 
         random_indices = numpy.arange(n)
-        numpy.random.shuffle(random_indices)
-    else:
-        try:
-            random_indices = numpy.array(random.sample(xrange(n), sample_size))
-        except OverflowError:
-            # If the population is very large relative to the sample
-            # size than we'll get very few duplicates by chance
-            logging.warning("There may be duplicates in the sample")
-            sample = numpy.array([random.sample(xrange(n_records), 2)
-                                  for _ in xrange(sample_size)])
-            return numpy.sort(sample, axis=1)
-
-
+    else :
+        random_indices = numpy.random.randint(n, size=sample_size)
+        
+    random_indices.dtype = 'uint'
 
     b = 1 - 2 * n_records
 
     x = numpy.trunc((-b - numpy.sqrt(b ** 2 - 8 * random_indices)) / 2)
     y = random_indices + x * (b + x + 2) / 2 + 1
 
-    if not zero_indexed:
-        x += 1
-        y += 1
-
     return numpy.column_stack((x, y)).astype(int)
 
+def randomPairsMatch(n_records_A, n_records_B, sample_size):
+    """
+    Return random combinations of indices for record list A and B
+    """
+    if not n_records_A or not n_records_B :
+        raise ValueError("There must be at least one record in A and in B")
+
+    if sample_size >= n_records_A * n_records_B :
+
+        if sample_size > n_records_A * n_records_B :
+            warnings.warn("Requested sample of size %d, only returning %d possible pairs" % (sample_size, n_records_A * n_records_B))
+
+        return backport.cartesian((numpy.arange(n_records_A),
+                                   numpy.arange(n_records_B)))
+
+    A_samples = numpy.random.randint(n_records_A, size=sample_size)
+    B_samples = numpy.random.randint(n_records_B, size=sample_size)
+    pairs = zip(A_samples,B_samples)
+    set_pairs = set(pairs)
+
+    while len(set_pairs) < sample_size:
+        set_pairs.update(randomPairsMatch(n_records_A,
+                                          n_records_B,
+                                          (sample_size-len(set_pairs))))
+    else:
+        return set_pairs
 
 
 def trainModel(training_data, data_model, alpha=.001):
@@ -60,81 +97,67 @@ def trainModel(training_data, data_model, alpha=.001):
     Use logistic regression to train weights for all fields in the data model
     """
     
-    labels = training_data['label']
+    labels = numpy.array(training_data['label'] == 'match', dtype='i4')
     examples = training_data['distances']
 
     (weight, bias) = lr.lr(labels, examples, alpha)
 
     for i, name in enumerate(data_model['fields']) :
-        data_model['fields'][name]['weight'] = float(weight[i])
+        data_model['fields'][name].weight = float(weight[i])
 
     data_model['bias'] = bias
 
     return data_model
 
 
-def fieldDistances(record_pairs, data_model):
-    fields = data_model['fields']
+def fieldDistances(record_pairs, data_model, num_records=None):
 
-    field_comparators = [(field, v['comparator'])
-                         for field, v in fields.items()
-                         if v['type'] not in ('Missing Data',
-                                              'Interaction')]
-
+    if num_records is None :
+        num_records = len(record_pairs)
     
-    missing_field_indices = [i for i, (field, v) 
-                             in enumerate(fields.items())
-                             if 'Has Missing' in v and v['Has Missing']]
-
-    field_names = fields.keys()
-  
-    interactions = []
-    for field in fields :
-        if fields[field]['type'] == 'Interaction' :
-            interaction_indices = []
-            for interaction_field in fields[field]['Interaction Fields'] :
-                interaction_indices.append(field_names.index(interaction_field))
-            interactions.append(interaction_indices)
+    distances = numpy.empty((num_records, data_model.total_fields))
     
-    field_distances = numpy.fromiter((compare(record_pair[0][field],
-                                              record_pair[1][field]) 
-                                      for record_pair in record_pairs 
-                                      for field, compare in field_comparators), 
-                                     'f4')
-    field_distances = field_distances.reshape(-1,len(field_comparators))
+    current_column = 0
 
-    interaction_distances = numpy.empty((field_distances.shape[0],
-                                         len(interactions)))
+    field_comparators = data_model.field_comparators.items()
+    for i, (record_1, record_2) in enumerate(record_pairs) :
+        for j, (field, compare) in enumerate(field_comparators) :
+            distances[i,j] = compare(record_1[field],
+                                     record_2[field])
 
-    for i, interaction in enumerate(interactions) :
-        a = numpy.prod(field_distances[...,interaction], axis=1)
-        interaction_distances[...,i] = a
-       
-    field_distances = numpy.concatenate((field_distances,
-                                         interaction_distances),
-                                        axis=1)
+    current_column += len(field_comparators)
 
+    for cat_index, length in data_model.categorical_indices :
+        start = current_column
+        end = start + length
         
+        distances[:,start:end] =\
+                (distances[:, cat_index][:,None] 
+                 == numpy.arange(2, 2 + length)[None,:])
 
-    missing_data = numpy.isnan(field_distances)
+        distances[:,cat_index][distances[:,cat_index] > 1] = 0
+                             
+        current_column = end
 
-    field_distances[missing_data] = 0
+    for interaction in data_model.interactions :
+        distances[:,current_column] =\
+                numpy.prod(distances[:,interaction], axis=1)
 
-    missing_indicators = 1-missing_data[:,missing_field_indices]
+        current_column += 1
 
-    
+    missing_data = numpy.isnan(distances[:,:current_column])
 
-    field_distances = numpy.concatenate((field_distances,
-                                         1-missing_data[:,missing_field_indices]),
-                                        axis=1)
+    distances[:,:current_column][missing_data] = 0
 
-    return field_distances
+    distances[:,current_column:] =\
+            1 - missing_data[:,data_model.missing_field_indices]
 
+    return distances
 
 def scorePairs(field_distances, data_model):
     fields = data_model['fields']
 
-    field_weights = [fields[name]['weight'] for name in fields]
+    field_weights = [fields[name].weight for name in fields]
     bias = data_model['bias']
 
     scores = numpy.dot(field_distances, field_weights)
@@ -143,73 +166,142 @@ def scorePairs(field_distances, data_model):
 
     return scores
 
+class ScoringFunction(object) :
+    def __init__(self, data_model, threshold, dtype) :
+        self.data_model = data_model
+        self.threshold = threshold
+        self.dtype = dtype
+    def __call__(self, chunk_queue, scored_pairs_queue) :
+        while True :
+            record_pairs = chunk_queue.get()
+            if record_pairs is None :
+                # put the poison pill back in the queue so that other
+                # scorers will know to stop
+                chunk_queue.put(None)
+                break
+            scored_pairs = self.scoreRecords(record_pairs)
+            scored_pairs_queue.put(scored_pairs)
 
-def scoreDuplicates(ids, records, id_type, data_model, threshold=None):
+    def scoreRecords(self, record_pairs) :
+        num_records = len(record_pairs)
 
-    score_dtype = [('pairs', id_type, 2), ('score', 'f4', 1)]
-    scored_pairs = numpy.zeros(0, dtype=score_dtype)
+        scored_pairs = numpy.empty(num_records,
+                                   dtype = self.dtype)
 
-    complete = False
-    chunk_size = 5000
-    i = 1
-    while not complete:
-        id_slice = list(itertools.islice(ids, 0, chunk_size))
-        can_slice = list(itertools.islice(records, 0, chunk_size))
+        def split_records() :
+            for i, pair in enumerate(record_pairs) :
+                record_1, record_2 = pair
+                scored_pairs['pairs'][i] = (record_1[0], record_2[0])
+                yield (record_1[1], record_2[1])
 
-        field_distances = fieldDistances(can_slice, data_model)
-        duplicate_scores = scorePairs(field_distances, data_model)
+        scored_pairs['score'] = scorePairs(fieldDistances(split_records(), 
+                                                          self.data_model,
+                                                          num_records),
+                                           self.data_model)
 
-        scored_pairs = numpy.append(scored_pairs,
-                                    numpy.array(zip(id_slice,
-                                                    duplicate_scores),
-                                                dtype=score_dtype)[duplicate_scores > threshold], 
-                                    axis=0)
-        i += 1
-        if len(field_distances) < chunk_size:
-            complete = True
-            logging.info('num chunks %d' % i)
+        scored_pairs = scored_pairs[scored_pairs['score'] > self.threshold]   
 
-    logging.info('all scores %d' % scored_pairs.shape)
-    scored_pairs = numpy.unique(scored_pairs)
-    logging.info('unique scores %d' % scored_pairs.shape)
+        return scored_pairs
+
+def scoreDuplicates(records, data_model, num_processes, threshold=0):
+    records = iter(records)
+
+    chunk_size = 1000
+
+    queue_size = num_processes
+    record_pairs_queue = backport.Queue(queue_size)
+    scored_pairs_queue = backport.Queue()
+
+    score_dtype = [('pairs', object, 2), ('score', 'f4', 1)]
+
+    scoring_function = ScoringFunction(data_model, 
+                                       threshold,
+                                       score_dtype)
+
+    # Start processes
+    processes = [backport.Process(target=scoring_function, 
+                                  args=(record_pairs_queue, 
+                                        scored_pairs_queue))
+                 for _ in xrange(num_processes)]
+
+    [process.start() for process in processes]
+
+    num_chunks = 0
+    num_records = 0
+
+    while True :
+        chunk = list(itertools.islice(records, chunk_size))
+        if chunk :
+            record_pairs_queue.put(chunk)
+            num_chunks += 1
+            num_records += chunk_size
+
+            if num_chunks > queue_size :
+                if record_pairs_queue.full() :
+                    if chunk_size < 100000 :
+                        if num_chunks % 10 == 0 :
+                            chunk_size = int(chunk_size * 1.1)
+                else :
+                    if chunk_size > 100 :
+                        chunk_size = int(chunk_size * 0.9)
+        else :
+            # put poison pill in queue to tell scorers that they are
+            # done
+            record_pairs_queue.put(None)
+            break
+
+    scored_pairs = numpy.empty(num_records,
+                               dtype=score_dtype)
+
+    start = 0
+    for _ in xrange(num_chunks) :
+        score_chunk = scored_pairs_queue.get()
+        end = start + len(score_chunk)
+        scored_pairs[start:end,] = score_chunk
+        start = end
+
+    scored_pairs.resize((end,))
+
+    [process.join() for process in processes]
 
     return scored_pairs
 
-def blockedPairs(blocks) :
-    for block in blocks :
+def peek(records) :
+    try :
+        record = records.next()
+    except AttributeError as e:
+        if "has no attribute 'next'" not in str(e) :
+            raise
+        try :
+            records = iter(records)
+            record = records.next()
+        except StopIteration :
+            return None, records
 
-        block_pairs = itertools.combinations(block, 2)
 
-        for pair in block_pairs :
-            yield pair
+    return record, itertools.chain([record], records)
 
-def split(iterable):
-    it = iter(iterable)
-    q = [collections.deque([x]) for x in it.next()] 
-    def proj(qi):
-        while True:
-            if not qi:
-                for qj, xj in zip(q, it.next()):
-                    qj.append(xj)
-            yield qi.popleft()
-    for qi in q:
-        yield proj(qi)
 
-import collections
+def freezeData(data) : # pragma : no cover
+    return [(frozendict(record_1), 
+             frozendict(record_2))
+            for record_1, record_2 in data]
+
+
 
 class frozendict(collections.Mapping):
     """Don't forget the docstrings!!"""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs): # pragma : no cover
         self._d = dict(*args, **kwargs)
 
-    def __iter__(self):
+    def __iter__(self):                  # pragma : no cover
         return iter(self._d)
 
-    def __len__(self):
+    def __len__(self):                   # pragma : no cover
         return len(self._d)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key):          # pragma : no cover
         return self._d[key]
 
     def __repr__(self) :
@@ -221,266 +313,3 @@ class frozendict(collections.Mapping):
         except AttributeError:
             h = self._cached_hash = hash(frozenset(self._d.iteritems()))
             return h
-
-
-
-
-## {{{ http://code.activestate.com/recipes/576693/ (r9)
-# Backport of OrderedDict() class that runs on Python 2.4, 2.5, 2.6, 2.7 and pypy.
-# Passes Python2.7's test suite and incorporates all the latest updates.
-try:
-    from thread import get_ident as _get_ident
-except ImportError:
-    from dummy_thread import get_ident as _get_ident
-
-try:
-    from _abcoll import KeysView, ValuesView, ItemsView
-except ImportError:
-    pass
-
-class OrderedDict(dict):
-    'Dictionary that remembers insertion order'
-    # An inherited dict maps keys to values.
-    # The inherited dict provides __getitem__, __len__, __contains__, and get.
-    # The remaining methods are order-aware.
-    # Big-O running times for all methods are the same as for regular dictionaries.
-
-    # The internal self.__map dictionary maps keys to links in a doubly linked list.
-    # The circular doubly linked list starts and ends with a sentinel element.
-    # The sentinel element never gets deleted (this simplifies the algorithm).
-    # Each link is stored as a list of length three:  [PREV, NEXT, KEY].
-
-    def __init__(self, *args, **kwds):
-        '''Initialize an ordered dictionary.  Signature is the same as for
-        regular dictionaries, but keyword arguments are not recommended
-        because their insertion order is arbitrary.
-
-        '''
-        if len(args) > 1:
-            raise TypeError('expected at most 1 arguments, got %d' % len(args))
-        try:
-            self.__root
-        except AttributeError:
-            self.__root = root = []                     # sentinel node
-            root[:] = [root, root, None]
-            self.__map = {}
-        self.__update(*args, **kwds)
-
-    def __setitem__(self, key, value, dict_setitem=dict.__setitem__):
-        'od.__setitem__(i, y) <==> od[i]=y'
-        # Setting a new item creates a new link which goes at the end of the linked
-        # list, and the inherited dictionary is updated with the new key/value pair.
-        if key not in self:
-            root = self.__root
-            last = root[0]
-            last[1] = root[0] = self.__map[key] = [last, root, key]
-        dict_setitem(self, key, value)
-
-    def __delitem__(self, key, dict_delitem=dict.__delitem__):
-        'od.__delitem__(y) <==> del od[y]'
-        # Deleting an existing item uses self.__map to find the link which is
-        # then removed by updating the links in the predecessor and successor nodes.
-        dict_delitem(self, key)
-        link_prev, link_next, key = self.__map.pop(key)
-        link_prev[1] = link_next
-        link_next[0] = link_prev
-
-    def __iter__(self):
-        'od.__iter__() <==> iter(od)'
-        root = self.__root
-        curr = root[1]
-        while curr is not root:
-            yield curr[2]
-            curr = curr[1]
-
-    def __reversed__(self):
-        'od.__reversed__() <==> reversed(od)'
-        root = self.__root
-        curr = root[0]
-        while curr is not root:
-            yield curr[2]
-            curr = curr[0]
-
-    def clear(self):
-        'od.clear() -> None.  Remove all items from od.'
-        try:
-            for node in self.__map.itervalues():
-                del node[:]
-            root = self.__root
-            root[:] = [root, root, None]
-            self.__map.clear()
-        except AttributeError:
-            pass
-        dict.clear(self)
-
-    def popitem(self, last=True):
-        '''od.popitem() -> (k, v), return and remove a (key, value) pair.
-        Pairs are returned in LIFO order if last is true or FIFO order if false.
-
-        '''
-        if not self:
-            raise KeyError('dictionary is empty')
-        root = self.__root
-        if last:
-            link = root[0]
-            link_prev = link[0]
-            link_prev[1] = root
-            root[0] = link_prev
-        else:
-            link = root[1]
-            link_next = link[1]
-            root[1] = link_next
-            link_next[0] = root
-        key = link[2]
-        del self.__map[key]
-        value = dict.pop(self, key)
-        return key, value
-
-    # -- the following methods do not depend on the internal structure --
-
-    def keys(self):
-        'od.keys() -> list of keys in od'
-        return list(self)
-
-    def values(self):
-        'od.values() -> list of values in od'
-        return [self[key] for key in self]
-
-    def items(self):
-        'od.items() -> list of (key, value) pairs in od'
-        return [(key, self[key]) for key in self]
-
-    def iterkeys(self):
-        'od.iterkeys() -> an iterator over the keys in od'
-        return iter(self)
-
-    def itervalues(self):
-        'od.itervalues -> an iterator over the values in od'
-        for k in self:
-            yield self[k]
-
-    def iteritems(self):
-        'od.iteritems -> an iterator over the (key, value) items in od'
-        for k in self:
-            yield (k, self[k])
-
-    def update(*args, **kwds):
-        '''od.update(E, **F) -> None.  Update od from dict/iterable E and F.
-
-        If E is a dict instance, does:           for k in E: od[k] = E[k]
-        If E has a .keys() method, does:         for k in E.keys(): od[k] = E[k]
-        Or if E is an iterable of items, does:   for k, v in E: od[k] = v
-        In either case, this is followed by:     for k, v in F.items(): od[k] = v
-
-        '''
-        if len(args) > 2:
-            raise TypeError('update() takes at most 2 positional '
-                            'arguments (%d given)' % (len(args),))
-        elif not args:
-            raise TypeError('update() takes at least 1 argument (0 given)')
-        self = args[0]
-        # Make progressively weaker assumptions about "other"
-        other = ()
-        if len(args) == 2:
-            other = args[1]
-        if isinstance(other, dict):
-            for key in other:
-                self[key] = other[key]
-        elif hasattr(other, 'keys'):
-            for key in other.keys():
-                self[key] = other[key]
-        else:
-            for key, value in other:
-                self[key] = value
-        for key, value in kwds.items():
-            self[key] = value
-
-    __update = update  # let subclasses override update without breaking __init__
-
-    __marker = object()
-
-    def pop(self, key, default=__marker):
-        '''od.pop(k[,d]) -> v, remove specified key and return the corresponding value.
-        If key is not found, d is returned if given, otherwise KeyError is raised.
-
-        '''
-        if key in self:
-            result = self[key]
-            del self[key]
-            return result
-        if default is self.__marker:
-            raise KeyError(key)
-        return default
-
-    def setdefault(self, key, default=None):
-        'od.setdefault(k[,d]) -> od.get(k,d), also set od[k]=d if k not in od'
-        if key in self:
-            return self[key]
-        self[key] = default
-        return default
-
-    def __repr__(self, _repr_running={}):
-        'od.__repr__() <==> repr(od)'
-        call_key = id(self), _get_ident()
-        if call_key in _repr_running:
-            return '...'
-        _repr_running[call_key] = 1
-        try:
-            if not self:
-                return '%s()' % (self.__class__.__name__,)
-            return '%s(%r)' % (self.__class__.__name__, self.items())
-        finally:
-            del _repr_running[call_key]
-
-    def __reduce__(self):
-        'Return state information for pickling'
-        items = [[k, self[k]] for k in self]
-        inst_dict = vars(self).copy()
-        for k in vars(OrderedDict()):
-            inst_dict.pop(k, None)
-        if inst_dict:
-            return (self.__class__, (items,), inst_dict)
-        return self.__class__, (items,)
-
-    def copy(self):
-        'od.copy() -> a shallow copy of od'
-        return self.__class__(self)
-
-    @classmethod
-    def fromkeys(cls, iterable, value=None):
-        '''OD.fromkeys(S[, v]) -> New ordered dictionary with keys from S
-        and values equal to v (which defaults to None).
-
-        '''
-        d = cls()
-        for key in iterable:
-            d[key] = value
-        return d
-
-    def __eq__(self, other):
-        '''od.__eq__(y) <==> od==y.  Comparison to another OD is order-sensitive
-        while comparison to a regular mapping is order-insensitive.
-
-        '''
-        if isinstance(other, OrderedDict):
-            return len(self)==len(other) and self.items() == other.items()
-        return dict.__eq__(self, other)
-
-    def __ne__(self, other):
-        return not self == other
-
-    # -- the following methods are only used in Python 2.7 --
-
-    def viewkeys(self):
-        "od.viewkeys() -> a set-like object providing a view on od's keys"
-        return KeysView(self)
-
-    def viewvalues(self):
-        "od.viewvalues() -> an object providing a view on od's values"
-        return ValuesView(self)
-
-    def viewitems(self):
-        "od.viewitems() -> a set-like object providing a view on od's items"
-        return ItemsView(self)
-## end of http://code.activestate.com/recipes/576693/ }}}
-        

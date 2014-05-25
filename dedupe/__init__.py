@@ -5,25 +5,15 @@ __all__ = ['affinegap',
            'clustering',
            'core',
            'lr',
+           'backport',
            'predicates',
-           'training_sample',
            'crossvalidation',
-           'dedupe',
            'distance'
            ]
 
 #from distance import affinegap
-from distance import affinegap
-import distance 
-import mekano
-import blocking
-import clustering
-import core
-import lr
-import predicates
-import training
-import crossvalidation
-from api import Dedupe
+from api import StaticDedupe, Dedupe
+from api import StaticRecordLink, RecordLink
 from core import randomPairs
-from convenience import dataSample
-from convenience import blockData
+from convenience import consoleLabel, trainingDataDedupe, trainingDataLink
+from AsciiDammit import asciiDammit

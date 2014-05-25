@@ -7,6 +7,8 @@ import copy
 import numpy
 import logging
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # http://code.activestate.com/recipes/521906-k-fold-cross-validation-partition/
 
@@ -19,7 +21,7 @@ def gridSearch(training_data,
 
     training_data = training_data[numpy.random.permutation(training_data.size)]
 
-    logging.info('using cross validation to find optimum alpha...')
+    logger.info('using cross validation to find optimum alpha...')
     scores = []
 
     fields = sorted(original_data_model['fields'].keys())
@@ -30,17 +32,17 @@ def gridSearch(training_data,
         for (training, validation) in kFolds(training_data, k):
             data_model = trainer(training, original_data_model, alpha)
 
-            weight = numpy.array([data_model['fields'][field]['weight']
+            weight = numpy.array([data_model['fields'][field].weight
                                   for field in fields])
             bias = data_model['bias']
 
-            labels = validation['label']
+            labels = validation['label'] == 'match'
             predictions = numpy.dot(validation['distances'], weight) + bias
 
             true_dupes = numpy.sum(labels == 1)
 
             if true_dupes == 0 :
-                logging.warning("not real positives, change size of folds")
+                logger.warning("not real positives, change size of folds")
                 continue
 
             true_predicted_dupes = numpy.sum(predictions[labels == 1] > 0)
@@ -58,13 +60,13 @@ def gridSearch(training_data,
             all_score += score
 
         average_score = all_score/k
-        logging.debug("Average Score: %f", average_score)
+        logger.debug("Average Score: %f", average_score)
 
         scores.append(average_score)
 
     best_alpha = search_space[::-1][scores[::-1].index(max(scores))]
 
-    logging.info('optimum alpha: %f' % best_alpha)
+    logger.info('optimum alpha: %f' % best_alpha)
     return best_alpha
 
 
