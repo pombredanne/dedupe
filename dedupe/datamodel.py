@@ -11,6 +11,16 @@ from dedupe.distance.affinegap import normalizedAffineGapDistance
 from dedupe.distance.haversine import compareLatLong
 from dedupe.distance.categorical import CategoricalComparator
 
+valid_fields = ['String',
+                'ShortString',
+                'LatLong',
+                'Set',
+                'Source',
+                'Text',
+                'Categorical',
+                'Custom',
+                'Interaction']
+
 class DataModel(dict) :
     def __init__(self, fields):
 
@@ -34,11 +44,14 @@ class DataModel(dict) :
             if definition['type'] == 'LatLong' :
                 field_model[field] = LatLongType(field, definition)
                 
-            elif definition['type'] == 'Set' :
-                field_model[field] = SetType(field, definition)
                 
             elif definition['type'] == 'String' :
                 field_model[field] = StringType(field, definition)
+
+            elif definition['type'] == 'Set' :
+                if 'corpus' not in definition :
+                    definition['corpus'] = None 
+                field_model[field] = SetType(field, definition)
 
             elif definition['type'] == 'Text' :
                 if 'corpus' not in definition :
@@ -99,19 +112,9 @@ class DataModel(dict) :
                              "{'Phone': {type: 'String'}}"
                              )
 
-        elif definition['type'] not in ['String',
-                                        'ShortString',
-                                        'LatLong',
-                                        'Set',
-                                        'Source',
-                                        'Text',
-                                        'Categorical',
-                                        'Custom',
-                                        'Interaction']:
-            raise ValueError("Invalid field type: field "
-                             "specifications are dictionaries that must "
-                             "include a type definition, ex. "
-                             "{'Phone': {type: 'String'}}")
+        elif definition['type'] not in valid_fields :
+            raise ValueError("Field type %s not valid. Valid types include %s"
+                             % (definition['type'], ', '.join(valid_fields)))
         
         elif definition['type'] != 'Custom' and 'comparator' in definition :
             raise ValueError("Custom comparators can only be defined "
@@ -155,7 +158,7 @@ class DataModel(dict) :
 class FieldType(object) :
     weight = 0
     comparator = None
-    simple_predicates = []    
+    _predicate_functions = []    
              
     def __init__(self, field, definition) :
         self.field = field
@@ -166,34 +169,36 @@ class FieldType(object) :
             self.has_missing = False
 
         self.predicates = [dedupe.blocking.SimplePredicate(pred, field) 
-                           for pred in self.simple_predicates]
+                           for pred in self._predicate_functions]
 
 class ShortStringType(FieldType) :
     comparator = normalizedAffineGapDistance
     type = "ShortString"
 
-    simple_predicates = (dedupe.predicates.wholeFieldPredicate,
-                         dedupe.predicates.tokenFieldPredicate,
-                         dedupe.predicates.commonIntegerPredicate,
-                         dedupe.predicates.sameThreeCharStartPredicate,
-                         dedupe.predicates.sameFiveCharStartPredicate,
-                         dedupe.predicates.sameSevenCharStartPredicate,
-                         dedupe.predicates.nearIntegersPredicate,
-                         dedupe.predicates.commonFourGram,
-                         dedupe.predicates.commonSixGram)
+    _predicate_functions = (dedupe.predicates.wholeFieldPredicate,
+                            dedupe.predicates.tokenFieldPredicate,
+                            dedupe.predicates.firstTokenPredicate,
+                            dedupe.predicates.commonIntegerPredicate,
+                            dedupe.predicates.nearIntegersPredicate,
+                            dedupe.predicates.firstIntegerPredicate,
+                            dedupe.predicates.sameThreeCharStartPredicate,
+                            dedupe.predicates.sameFiveCharStartPredicate,
+                            dedupe.predicates.sameSevenCharStartPredicate,
+                            dedupe.predicates.commonFourGram,
+                            dedupe.predicates.commonSixGram)
 
 
 class StringType(ShortStringType) :
     comparator = normalizedAffineGapDistance
     type = "String"
 
-    canopy_predicates = (0.2, 0.4, 0.6, 0.8)
+    _canopy_thresholds = (0.2, 0.4, 0.6, 0.8)
 
     def __init__(self, field, definition) :
         super(StringType, self).__init__(field, definition)
 
         canopy_predicates = [dedupe.blocking.TfidfPredicate(threshold, field)
-                             for threshold in self.canopy_predicates]
+                             for threshold in self._canopy_thresholds]
 
         self.predicates += canopy_predicates
 
@@ -211,22 +216,22 @@ class LatLongType(FieldType) :
     comparator = compareLatLong
     type = "LatLong"
 
-    simple_predicates = [dedupe.predicates.latLongGridPredicate]
+    _predicate_functions = [dedupe.predicates.latLongGridPredicate]
 
 
 class SetType(FieldType) :
     type = "Set"
 
-    simple_predicates = (dedupe.predicates.wholeSetPredicate,
+    _predicate_functions = (dedupe.predicates.wholeSetPredicate,
                          dedupe.predicates.commonSetElementPredicate)
 
-    canopy_predicates = (0.2, 0.4, 0.6, 0.8)
+    _canopy_thresholds = (0.2, 0.4, 0.6, 0.8)
 
     def __init__(self, field, definition) :
         super(SetType, self).__init__(field, definition)
 
         canopy_predicates = [dedupe.blocking.TfidfSetPredicate(threshold, field)
-                             for threshold in self.canopy_predicates]
+                             for threshold in self._canopy_thresholds]
 
         self.predicates += canopy_predicates
 

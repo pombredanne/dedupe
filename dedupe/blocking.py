@@ -57,6 +57,15 @@ class Blocker:
                              {'iteration' :i,
                               'elapsed' :time.time() - start_time})
 
+        self._resetCanopies()
+
+
+    def _resetCanopies(self) :
+        # clear canopies to reduce memory usage
+        for predicate_set in self.tfidf_fields.values() :
+            for predicate in predicate_set :
+                predicate.canopy = {}
+
 
 
 class DedupeBlocker(Blocker) :
@@ -334,6 +343,7 @@ class Coverage(object) :
                 if len(block) < 100 :
                     del self.blocks[predicate][field_pred]
 
+
     def predicateCoverage(self,
                           predicate_set,
                           pairs) :
@@ -369,6 +379,7 @@ class DedupeCoverage(Coverage) :
 
         self.stop_words = blocker.stop_words
         self.coveredBy(blocker.predicates, record_ids, pairs)
+        blocker._resetCanopies()
 
 class RecordLinkCoverage(Coverage) :
     def __init__(self, predicate_set, pairs) :
@@ -416,9 +427,7 @@ class RecordLinkCoverage(Coverage) :
 
         self.stop_words = blocker.stop_words
         self.coveredBy(blocker.predicates, record_ids, pairs)
-        
-
-
+        blocker._resetCanopies()
         
 
 def stopWords(data) :
@@ -481,7 +490,6 @@ class TfidfPredicate(Predicate):
         else :
             return ()
 
-        return call
 
     def stringify(self, doc) :
         return doc
