@@ -30,6 +30,7 @@ import dedupe.predicates as predicates
 import dedupe.blocking as blocking
 import dedupe.clustering as clustering
 from dedupe.datamodel import DataModel
+import dedupe.centroid as centroid
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ class Matching(object):
 
         return probability[i]
 
-    def matchBlocks(self, blocks, threshold=.5):
+    def matchBlocks(self, blocks, threshold=.5, *args, **kwargs):
         """
         Partitions blocked data and returns a list of clusters, where
         each cluster is a tuple of record ids
@@ -120,7 +121,10 @@ class Matching(object):
                                             self.num_processes,
                                             threshold)
 
-        clusters = self._cluster(self.matches, cluster_threshold)
+        logger.info("matching done, begin clustering")
+
+        clusters = self._cluster(self.matches, 
+                                 cluster_threshold, *args, **kwargs)
         
         return clusters
 
@@ -131,29 +135,6 @@ class Matching(object):
                                  "The field '%s' is in data_model but not "
                                  "in a record" % k)
 
-    def _blockedPairs(self, blocks) :
-        """
-        Generate tuples of pairs of records from a block of records
-        
-        Arguments:
-        
-        blocks -- an iterable sequence of blocked records
-        """
-        
-        block, blocks = core.peek(blocks)
-        self._checkBlock(block)
-
-        def pair_gen() :
-            disjoint = set.isdisjoint
-            blockPairs = self._blockPairs
-            for block in blocks :
-                for pair in blockPairs(block) :
-                    ((key_1, record_1, smaller_ids_1), 
-                     (key_2, record_2, smaller_ids_2)) = pair
-                    if disjoint(smaller_ids_1, smaller_ids_2) :
-                        yield (key_1, record_1), (key_2, record_2)
-
-        return pair_gen()
 
     def _logLearnedWeights(self): # pragma: no cover
         """
@@ -191,8 +172,10 @@ class DedupeMatching(Matching) :
     def match(self, data, threshold = 0.5) : # pragma : no cover
         """
         Identifies records that all refer to the same entity, returns tuples
-        of record ids, where the record_ids within each tuple should refer
-        to the same entity
+        containing a set of record ids and a confidence score as a float between 0
+        and 1. The record_ids within each set should refer to the
+        same entity and the confidence score is a measure of our confidence that
+        all the records in a cluster refer to the same entity.
         
         This method should only used for small to moderately sized datasets
         for larger data, use matchBlocks
@@ -234,9 +217,24 @@ class DedupeMatching(Matching) :
         blocked_pairs = self._blockData(data)
         return self.thresholdBlocks(blocked_pairs, recall_weight)
 
-    def _blockPairs(self, block) :  # pragma : no cover
-        return itertools.combinations(block, 2)
+    def _blockedPairs(self, blocks) :
+        """
+        Generate tuples of pairs of records from a block of records
         
+        Arguments:
+        
+        blocks -- an iterable sequence of blocked records
+        """
+        
+        block, blocks = core.peek(blocks)
+        self._checkBlock(block)
+
+	combinations = itertools.combinations
+
+        pairs = (combinations(block, 2) for block in blocks)
+
+        return itertools.chain.from_iterable(pairs) 
+
     def _checkBlock(self, block) :
         if not block :
             raise ValueError("You have not provided any data blocks")
@@ -315,9 +313,11 @@ class RecordLinkMatching(Matching) :
 
     def match(self, data_1, data_2, threshold = 1.5) : # pragma : no cover
         """
-        Identifies pairs of records that refer to the same entity, returns tuples
-        of record ids, where both record_ids within a tuple should refer
-        to the same entity
+        Identifies pairs of records that refer to the same entity, returns
+        tuples containing a set of record ids and a confidence score as a float
+        between 0 and 1. The record_ids within each set should refer to the 
+        same entity and the confidence score is the estimated probability that
+        the records refer to the same entity.
         
         This method should only used for small to moderately sized datasets
         for larger data, use matchBlocks
@@ -363,9 +363,23 @@ class RecordLinkMatching(Matching) :
         blocked_pairs = self._blockData(data_1, data_2)
         return self.thresholdBlocks(blocked_pairs, recall_weight)
 
-    def _blockPairs(self, block) : # pragma : no cover
-        base, target = block
-        return itertools.product(base, target)
+    def _blockedPairs(self, blocks) :
+        """
+        Generate tuples of pairs of records from a block of records
+        
+        Arguments:
+        
+        blocks -- an iterable sequence of blocked records
+        """
+        
+        block, blocks = core.peek(blocks)
+        self._checkBlock(block)
+
+	product = itertools.product
+
+        pairs = (product(base, target) for base, target in blocks)
+
+        return itertools.chain.from_iterable(pairs) 
         
     def _checkBlock(self, block) :
         try :
@@ -445,12 +459,13 @@ class StaticMatching(Matching) :
         #### Example usage
 
             # initialize from a settings file
-            deduper = dedupe.Dedupe('my_learned_settings')
+            with open('my_learned_settings', 'rb') as f:
+                deduper = dedupe.StaticDedupe(f)
 
         #### Keyword arguments
         
         `settings_file`
-        A file location for a settings file.
+        A file object containing settings data.
 
 
         Settings files are typically generated by saving the settings
@@ -460,20 +475,16 @@ class StaticMatching(Matching) :
         super(StaticMatching, self).__init__()
 
 
-        if settings_file.__class__ is not str :
-            raise ValueError("Must supply a settings file name")
-
         self.num_processes = num_processes
 
-        with open(settings_file, 'rb') as f: # pragma : no cover
-            try:
-                self.data_model = pickle.load(f)
-                self.predicates = pickle.load(f)
-                self.stop_words = pickle.load(f)
-            except KeyError :
-                raise ValueError("The settings file doesn't seem to be in "
-                                 "right format. You may want to delete the "
-                                 "settings file and try again")
+        try:
+            self.data_model = pickle.load(settings_file)
+            self.predicates = pickle.load(settings_file)
+            self.stop_words = pickle.load(settings_file)
+        except KeyError :
+            raise ValueError("The settings file doesn't seem to be in "
+                             "right format. You may want to delete the "
+                             "settings file and try again")
 
         self._logLearnedWeights()
         logger.info(self.predicates)
@@ -598,21 +609,17 @@ class ActiveMatching(Matching) :
         del self.data_sample
 
 
-    def readTraining(self, training_source) : # pragma : no cover
+    def readTraining(self, training_file) :
         '''
-        Read training from previously saved training data file
+        Read training from previously built training data file object
         
         Arguments:
         
-        training_source -- the path of the training data file
+        training_file -- file object containing the training data
         '''
-
+        
         logger.info('reading training from file')
-
-        with open(training_source, 'r') as f:
-            self._importTraining(f)
-
-    def _importTraining(self, training_file) :
+        
         training_pairs = json.load(training_file, 
                                    cls=serializer.dedupe_decoder)
 
@@ -702,33 +709,31 @@ class ActiveMatching(Matching) :
                                      self.stop_words) 
 
 
-    def writeSettings(self, file_name): # pragma : no cover
+    def writeSettings(self, file_obj): # pragma : no cover
         """
-        Write a settings file that contains the 
-        data model and predicates
+        Write a settings file containing the 
+        data model and predicates to a file object
 
         Keyword arguments:
-        file_name -- path to file
+        file_obj -- file object to write settings data into
         """
 
-        with open(file_name, 'w') as f:
-            pickle.dump(self.data_model, f)
-            pickle.dump(self.predicates, f)
-            pickle.dump(dict(self.stop_words), f)
+        pickle.dump(self.data_model, file_obj)
+        pickle.dump(self.predicates, file_obj)
+        pickle.dump(dict(self.stop_words), file_obj)
 
-    def writeTraining(self, file_name): # pragma : no cover
+    def writeTraining(self, file_obj): # pragma : no cover
         """
         Write to a json file that contains labeled examples
 
         Keyword arguments:
-        file_name -- path to a json file
+        file_obj -- file object to write training data to
         """
 
-        with open(file_name, 'wb') as f:
-            json.dump(self.training_pairs, 
-                      f, 
-                      default=serializer._to_json,
-                      ensure_ascii=False)
+        json.dump(self.training_pairs, 
+                  file_obj, 
+                  default=serializer._to_json,
+                  ensure_ascii=False)
 
 
     def uncertainPairs(self) :
@@ -971,6 +976,51 @@ class RecordLink(RecordLinkMatching, ActiveMatching) :
 
         return data_sample
 
+class GazetteerMatching(RecordLinkMatching) :
+    
+    def __init__(self, *args, **kwargs) :
+        super(GazetteerMatching, self).__init__(*args, **kwargs)
+
+        self._cluster = clustering.gazetteMatching
+        self._linkage_type = "GazetteerMatching"
+
+    def match(self, data_1, data_2, threshold = 1.5, n_matches = 1) : # pragma : no cover
+        """Identifies pairs of records that refer to the same entity, returns
+        tuples containing a set of record ids and a confidence score as a float
+        between 0 and 1. The record_ids within each set should refer to the 
+        same entity and the confidence score is the estimated probability that
+        the records refer to the same entity.
+        
+        This method should only used for small to moderately sized datasets
+        for larger data, use matchBlocks
+        
+        Arguments:
+        data_1    -- Dictionary of records from first dataset, where the 
+                     keys are record_ids and the values are dictionaries
+                     with the keys being field names
+
+        data_2    -- Dictionary of records from second dataset, same form 
+                     as data_1
+                                          
+        threshold -- Number between 0 and 1 (default is .5). We will consider
+                     records as potential duplicates if the predicted 
+                     probability of being a duplicate is above the threshold.
+
+                     Lowering the number will increase recall, raising it
+                     will increase precision
+        
+        n_matches -- Maximum number of possible matches from data_2
+                     for each record in data_1
+        """
+        self._cluster = clustering.gazetteMatching
+        blocked_pairs = self._blockData(data_1, data_2)
+        return self.matchBlocks(blocked_pairs, threshold, n_matches)
+
+class Gazetteer(RecordLink, GazetteerMatching):
+    pass
+
+class StaticGazetteer(StaticRecordLink, GazetteerMatching):
+    pass
 
 def predicateGenerator(data_model) :
     predicates = []

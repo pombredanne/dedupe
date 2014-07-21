@@ -103,7 +103,7 @@ trained dedupe, you can load the saved settings with StaticDedupe.
 
    Initialize a Dedupe object with saved settings
 
-   :param str settings_file: a path to settings file produced from
+   :param str settings_file: A file object containing settings info produced from
 			      the :py:meth:`Dedupe.writeSettings` of a
 			      previous, active Dedupe object.
    :param int num_processes: the number of processes to use for parallel
@@ -111,8 +111,8 @@ trained dedupe, you can load the saved settings with StaticDedupe.
 
 
    .. code:: python
-
-       deduper = StaticDedupe('my_settings_file')
+       with open('my_settings_file', 'rb') as f:
+           deduper = StaticDedupe(f)
 
    .. include:: common_dedupe_methods.rst
    .. include:: common_methods.rst
@@ -205,13 +205,13 @@ Example
 
 Class for record linkage using saved settings. If you have already
 trained a record linkage instance, you can load the saved settings with
-StaticDedupe.
+StaticRecordLink.
 
 .. py:class:: StaticRecordLink(settings_file, [num_processes])
 
    Initialize a Dedupe object with saved settings
 
-   :param str settings_file: a path to settings file produced from
+   :param str settings_file: File object containing settings data produced from
 			      the :py:meth:`RecordLink.writeSettings` of a
 			      previous, active Dedupe object.
    :param int num_processes: the number of processes to use for parallel
@@ -220,10 +220,44 @@ StaticDedupe.
 
    .. code:: python
 
-       deduper = StaticDedupe('my_settings_file')
+       with open('my_settings_file', 'rb') as f:
+           deduper = StaticDedupe(f)
 
    .. include:: common_recordlink_methods.rst
    .. include:: common_methods.rst
+
+:class:`Gazetteer` Objects
+---------------------------
+
+Class for active learning gazetteer matching.
+
+Gazetteer matching is for matching a messy data set against a
+'canonical dataset', i.e. one that does not have any duplicates. This
+class is useful for such tasks as matching messy addresses against
+a clean list. 
+
+The interface is the same as for RecordLink objects except for a
+couple of methods.
+
+.. py:class:: Gazetteer
+
+   .. include:: common_gazetteer_methods.rst
+
+
+:class:`StaticGazetteer` Objects
+--------------------------------
+
+Class for gazetter matching using saved settings. If you have already
+trained a gazetteer instance, you can load the saved settings with
+StaticGazetteer.
+
+This class has the same interface as StaticRecordLink except for a
+couple of methods.
+
+.. py:class:: StaticGazetteer
+
+   .. include:: common_gazetteer_methods.rst
+
 
 
 Convenience Functions
@@ -281,3 +315,14 @@ Convenience Functions
    function assumes that if two records do not share a common key then
    they are distinct records.
 
+
+.. py:function:: canonicalize(record_cluster)
+   
+   Constructs a canonical representation of a duplicate cluster by finding canonical values for each field
+
+   :param list record_cluster: A list of records within a duplicate cluster, where the records are dictionaries with field 
+                  names as keys and field values as values
+
+   .. code:: python
+
+      
