@@ -1,38 +1,44 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 import logging
-from collections import defaultdict
-from zope.index.text.parsetree import ParseError
+from .index import CanopyIndex
+import collections
+import itertools
 
 logger = logging.getLogger(__name__)
 
-#@profile
-def makeCanopy(index, token_vector, threshold) :
-    canopies = {}
-    seen = set([])
-    corpus_ids = set(token_vector.keys())
+class TfIdfIndex(object) :
+    def __init__(self, stop_words=[]) :
+        self._index = CanopyIndex(stop_words)
+ 
+        try : # py 2
+            self._doc_to_id = collections.defaultdict(itertools.count(1).next)
+        except AttributeError : # py 3
+            self._doc_to_id = collections.defaultdict(itertools.count(1).__next__)
 
-    while corpus_ids:
-        center_id = corpus_ids.pop()
-        center_vector = token_vector[center_id]
-
-        index.unindex_doc(center_id)
         
-        if not center_vector :
-            continue
+        self._parseTerms = self._index.lexicon.parseTerms
 
-        candidates = index.apply(center_vector).byValue(threshold)
-            
-        candidates = set(k for  _, k in candidates)
+    def index(self, doc) :
+        i = self._doc_to_id[doc]
+        self._index.index_doc(i, doc)
 
-        corpus_ids.difference_update(candidates)
+    def unindex(self, doc) :
+        i = self._doc_to_id.pop(doc)
+        self._index.unindex_doc(i)
+        self.initSearch()
 
-        for candidate_id in candidates :
-            canopies[candidate_id] = center_id
-            index.unindex_doc(candidate_id)
+    def initSearch(self) :
+        self._index.initSearch()
 
-        if candidates :
-            canopies[center_id] = center_id
+    def search(self, doc, threshold=0) :
+        query_list = self._parseTerms(doc)
+ 
+        if query_list :
+            results = [center for score, center 
+                       in self._index.apply(query_list, threshold)]
+        else :
+            results = []
 
-    return canopies
+        return results
 

@@ -6,53 +6,33 @@ try:
 except ImportError :
     raise ImportError("setuptools module required, please go to https://pypi.python.org/pypi/setuptools and follow the instructions for installing setuptools")
 
-# from Michael Hoffman's http://www.ebi.ac.uk/~hoffman/software/sunflower/
-
-class NumpyExtension(Extension):
-
-    def __init__(self, *args, **kwargs):
-        Extension.__init__(self, *args, **kwargs)
-
-        self._include_dirs = self.include_dirs
-        del self.include_dirs  # restore overwritten property
-
-    # warning: Extension is a classic class so it's not really read-only
-
-    @property
-    def include_dirs(self):
-        from numpy import get_include
-
-        return self._include_dirs + [get_include()]
-
-install_requires=['numpy', 
-                  'fastcluster', 
-                  'hcluster', 
+install_requires=['fastcluster', 
+                  'dedupe-hcluster',
+                  'affinegap>=1.2',
+                  'categorical-distance>=1.6',
+                  'future',
+                  'rlr',
+                  'metafone',
+                  'highered>=0.1.5',
+                  'canonicalize',
+                  'simplecosine',
+                  'haversine>=0.4.1',
                   'zope.interface', 
+                  'BTrees>=4.1.4',
+                  'simplejson',
                   'zope.index']
-
-try:
-    import json
-except ImportError:
-    install_requires.append('simplejson')
-
 
 setup(
     name='dedupe',
     url='https://github.com/datamade/dedupe',
-    version='0.5.3.0',
+    version='1.1.4',
     description='A python library for accurate and scaleable data deduplication and entity-resolution',
-    packages=['dedupe', 'dedupe.distance'],
-    ext_modules=[NumpyExtension('dedupe.distance.affinegap', ['src/affinegap.c']),
-                 Extension('dedupe.cpredicates', ['src/cpredicates.c']),
-                 NumpyExtension('dedupe.distance.haversine', ['src/haversine.c'], libraries=['m']),
-                 NumpyExtension('dedupe.lr', sources=['src/lr.c'])],
-
-                 
-
+    packages=['dedupe', 'dedupe.variables'],
+    ext_modules=[Extension('dedupe.cpredicates', ['src/cpredicates.c'])],
     license='The MIT License: http://www.opensource.org/licenses/mit-license.php',
     install_requires=install_requires,
     classifiers=[
-        'Development Status :: 3 - Alpha',
+        'Development Status :: 4 - Beta',
         'Intended Audience :: Developers',
         'Intended Audience :: Science/Research',
         'License :: OSI Approved :: MIT License',
@@ -61,9 +41,8 @@ setup(
         'Operating System :: Microsoft :: Windows',
         'Operating System :: POSIX',
         'Programming Language :: Cython', 
-        'Programming Language :: Python :: 2.6',
         'Programming Language :: Python :: 2.7',
-        'Programming Language :: Python :: 2 :: Only',
+        'Programming Language :: Python :: 3.4',
         'Topic :: Software Development :: Libraries :: Python Modules',
         'Topic :: Scientific/Engineering',
         'Topic :: Scientific/Engineering :: Information Analysis'],

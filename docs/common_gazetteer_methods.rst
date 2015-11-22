@@ -1,4 +1,25 @@
-.. py:method:: match(messy_data, canonical_data, threshold=0.5, n_matches=1)
+.. py:method:: index(data) 
+
+   Add records to the index of records to match against. If a record in
+   `canonical_data` has the same key as a previously indexed record, the 
+   old record will be replaced.
+
+   :param dict data: a dictionary of records where the keys
+		     are record_ids and the values are
+		     dictionaries with the keys being
+		     field_names
+
+.. py:method:: unindex(data) :
+   
+   Remove records from the index of records to match against. 
+
+   :param dict data: a dictionary of records where the keys
+		     are record_ids and the values are
+		     dictionaries with the keys being
+		     field_names
+
+
+.. py:method:: match(messy_data, threshold=0.5, n_matches=1)
 
    Identifies pairs of records that could refer to the same entity,
    returns tuples containing tuples of possible matches, with a
@@ -7,16 +28,11 @@
    canonical records. The confidence score is the estimated
    probability that the records refer to the same entity.
 
-   This method should only used for small to moderately sized datasets for
-   larger data, use matchBlocks
-
    :param dict messy_data: a dictionary of records from a messy
 			   dataset, where the keys are record_ids and
 			   the values are dictionaries with the keys
 			   being field names.
 
-   :param dict canonical_data: a dictionary of canonical records,
-			       same form as messy_data
    :param float threshold: a number between 0 and 1 (default is
 			   0.5). We will consider records as
 			   potential duplicates if the predicted
@@ -52,9 +68,62 @@
 
        clustered_dupes = deduper.matchBlocks(blocked_data, threshold)
 
-   :param list blocks: Sequence of tuples of records, where each tuple
-		       is a set of records covered by a blocking
-		       predicate.
+   :param list blocks: Sequence of records blocks. Each record block
+		       is a tuple containing two sequences of records,
+		       the records from the messy data set and the
+		       records from the canonical dataset. Within each
+		       block there should be at least one record from
+		       each datasets.  Along with each record, there
+		       should also be information on the blocks that
+		       cover that record.
+
+		       For example, if we have two records from a 
+		       messy dataset one record from a canonical dataset: 
+
+		       .. code :: python
+		           
+		          # Messy
+		          (1, {'name' : 'Pat', 'address' : '123 Main'})
+			  (2, {'name' : 'Sam', 'address' : '123 Main'})
+
+			  # Canonical
+			  (3, {'name' : 'Pat', 'address' : '123 Main'})
+
+		       and two predicates: "Whole name" and "Whole address".
+		       These predicates will produce the following blocks:
+
+		       .. code :: python
+
+		          # Block 1 (Whole name)
+		          (1, {'name' : 'Pat', 'address' : '123 Main'})
+			  (3, {'name' : 'Pat', 'address' : '123 Main'})
+
+			  # Block 2 (Whole name)
+			  (2, {'name' : 'Sam', 'address' : '123 Main'})
+
+			  # Block 3 (Whole address
+		          (1, {'name' : 'Pat', 'address' : '123 Main'})
+			  (2, {'name' : 'Sam', 'address' : '123 Main'})
+			  (3, {'name' : 'Pat', 'address' : '123 Main'})
+
+
+		       So, the blocks you feed to matchBlocks should look
+		       like this, 
+
+		       .. code :: python
+
+		          blocks =((
+			            [(1, {'name' : 'Pat', 'address' : '123 Main'}, set([]))],
+			            [(3, {'name' : 'Pat', 'address' : '123 Main'}, set([])]
+				    ), 
+			           (
+				    [(1, {'name' : 'Pat', 'address' : '123 Main'}, set([1]),
+				     ((2, {'name' : 'Sam', 'address' : '123 Main'}, set([])],
+			            [((3, {'name' : 'Pat', 'address' : '123 Main'}, set([1])]
+			            
+				    )
+				   )
+			  linker.matchBlocks(blocks)
 
    :param float threshold: Number between 0 and 1 (default is .5). We
 			   will only consider as duplicates record

@@ -1,4 +1,5 @@
 # Dedupe Python Library
+[![Linux build](https://img.shields.io/travis/datamade/dedupe.svg?style=flat-square&label=Linux build)](https://travis-ci.org/datamade/dedupe)[![Windows build](https://img.shields.io/appveyor/ci/fgregg/dedupe.svg?style=flat-square&label=Windows build)](https://ci.appveyor.com/project/fgregg/dedupe)[![Coverage](https://img.shields.io/coveralls/datamade/dedupe.svg?style=flat-square)](https://coveralls.io/r/datamade/dedupe?branch=master)
 
 _dedupe is a python library that uses machine learning to perform de-duplication and entity resolution quickly on structured data._
 
@@ -32,32 +33,12 @@ Web interface for de-duplicating spreadsheets with up to 10,000 rows. Read about
 If you only want to use dedupe, install it this way:
 
 ```bash
-pip install "numpy>=1.6"
+pip install "numpy>=1.9"
 pip install dedupe
 ```
 
-### Developers
-
-Dedupe requires [numpy](http://numpy.scipy.org/), which can be complicated to install. 
-If you are installing numpy for the first time, 
-[follow these instructions](http://docs.scipy.org/doc/numpy/user/install.html). You'll need to version 1.6 of numpy or higher.
-
-```bash
-git clone git://github.com/datamade/dedupe.git
-cd dedupe
-pip install "numpy>=1.6"
-pip install -r dev_requirements.txt
-# For python 2.7
-pip install -r requirements.txt
-# For python 2.6
-pip install -r py26_requirements.txt
-
-cython src/*.pyx
-python setup.py develop
-
-#If these tests pass, then everything should have been installed correctly!
-coverage run -m nose -I canonical_test
-```
+### Windows Install Notes
+We recommending [installing some of dedupe's dependencies from a wheel](https://pip.pypa.io/en/latest/user_guide.html#installing-from-wheels), particularly [numpy](http://www.lfd.uci.edu/~gohlke/pythonlibs/#numpy) and [fastcluster](http://www.lfd.uci.edu/~gohlke/pythonlibs/#fastcluster). 
 
 #### OS X Install Notes
 
@@ -73,10 +54,25 @@ With default configurations, dedupe cannot do parallel processing on Mac OS X.
 For more information and for instructions on how to enable this, [refer to the
 wiki](http://dedupe.readthedocs.org/en/latest/OSX-Install-Notes.html).
 
+### Developers
+
+Dedupe requires [numpy](http://numpy.scipy.org/), which can be complicated to install. 
+If you are installing numpy for the first time, 
+[follow these instructions](http://docs.scipy.org/doc/numpy/user/install.html). You'll need to version 1.9 of numpy or higher.
+
+```bash
+git clone git://github.com/datamade/dedupe.git
+cd dedupe
+pip install "numpy>=1.9"
+pip install -r requirements.txt
+cython src/*.pyx
+python setup.py develop
+
+#If these tests pass, then everything should have been installed correctly!
+coverage run -m nose -I canonical_test
+```
+
 ## Testing
-
-[<img src="https://travis-ci.org/datamade/dedupe.png" />](https://travis-ci.org/datamade/dedupe)[![Coverage Status](https://coveralls.io/repos/datamade/dedupe/badge.png?branch=master)](https://coveralls.io/r/datamade/dedupe?branch=master)
-
 Unit tests of core dedupe functions
 ```bash
 coverage run -m nose -I canonical_test

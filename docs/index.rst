@@ -33,7 +33,7 @@ Contents
    :maxdepth: 1
 
    API-documentation
-   Field-definition
+   Variable-definition
    OSX-Install-Notes
    How-it-works
    Bibliography
@@ -108,6 +108,12 @@ Check out `dedupe-examples
 <https://github.com/datamade/dedupe-examples>`__ for how to contribute
 a useful example of using dedupe.
 
+Citing dedupe
+=============
+
+If you use Dedupe in an academic work, please give this citation:
+
+Gregg, Forest and Derek Eder. 2015. Dedupe. https://github.com/datamade/dedupe.
 
 
 Indices and tables

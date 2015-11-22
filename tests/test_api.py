@@ -3,6 +3,7 @@ import unittest
 import random
 import numpy
 import warnings
+from collections import OrderedDict
 
 DATA_SAMPLE = ((dedupe.core.frozendict({'age': '27', 'name': 'Kyle'}), 
                 dedupe.core.frozendict({'age': '50', 'name': 'Bob'})),
@@ -15,29 +16,39 @@ DATA_SAMPLE = ((dedupe.core.frozendict({'age': '27', 'name': 'Kyle'}),
                (dedupe.core.frozendict({'age': '75', 'name': 'Charlie'}), 
                 dedupe.core.frozendict({'age': '21', 'name': 'Jimbo'})))
 
-class Match(unittest.TestCase) :
-  def test_initialize_fields(self) :
-    matcher = dedupe.api.Matching()
+data_dict = OrderedDict((('1', {'name' : 'Bob',         'age' : '51'}),
+                         ('2', {'name' : 'Linda',       'age' : '50'}),
+                         ('3', {'name' : 'Gene',        'age' : '12'}),
+                         ('4', {'name' : 'Tina',        'age' : '15'}),
+                         ('5', {'name' : 'Bob B.',      'age' : '51'}),
+                         ('6', {'name' : 'bob belcher', 'age' : '51'}),
+                         ('7', {'name' : 'linda ',      'age' : '50'})))
 
-    assert matcher.matches is None
-    assert matcher.blocker is None
-
+data_dict_2 = {  '1': {'name' : 'BOB',         'age' : '51'},
+                 '2': {'name' : 'LINDA',       'age' : '50'},
+                 '3': {'name' : 'GENE',        'age' : '12'},
+                 '4': {'name' : 'TINA',        'age' : '15'},
+                 '5': {'name' : 'BOB B.',      'age' : '51'},
+                 '6': {'name' : 'BOB BELCHER', 'age' : '51'},
+                 '7': {'name' : 'LINDA ',      'age' : '50'} }
 
 
 class ActiveMatch(unittest.TestCase) :
+  def setUp(self) :
+    self.field_definition = [{'field' : 'name', 'type': 'String'}, 
+                             {'field' :'age', 'type': 'String'}]
+
+
   def test_initialize_fields(self) :
     self.assertRaises(TypeError, dedupe.api.ActiveMatching)
-    self.assertRaises(ValueError, dedupe.api.ActiveMatching, [])
 
     matcher = dedupe.api.ActiveMatching({},)
 
-    assert matcher.matches is None
     assert matcher.blocker is None
 
 
   def test_check_record(self) :
-    matcher = dedupe.api.ActiveMatching({ 'name' : {'type': 'String'}, 
-                                          'age'  : {'type': 'String'}})
+    matcher = dedupe.api.ActiveMatching(self.field_definition)
 
     self.assertRaises(ValueError, matcher._checkRecordPairType, ())
     self.assertRaises(ValueError, matcher._checkRecordPairType, (1,2))
@@ -49,8 +60,7 @@ class ActiveMatch(unittest.TestCase) :
 
 
   def test_check_sample(self) :
-    matcher = dedupe.api.ActiveMatching({ 'name' : {'type': 'String'}, 
-                                          'age'  : {'type': 'String'}})
+    matcher = dedupe.api.ActiveMatching(self.field_definition)
 
     self.assertRaises(ValueError, 
                       matcher._checkDataSample, (i for i in range(10)))
@@ -67,61 +77,38 @@ class ActiveMatch(unittest.TestCase) :
       assert str(w[-1].message) == "You submitted an empty data_sample"
 
   def test_add_training(self) :
-    training_pairs = {'distinct' : DATA_SAMPLE[0:3],
-                      'match' : DATA_SAMPLE[3:5]}
-    matcher = dedupe.api.ActiveMatching({ 'name' : {'type': 'String'}, 
-                                          'age'  : {'type': 'String'}})
+    from collections import OrderedDict
+    training_pairs = OrderedDict((('distinct', DATA_SAMPLE[0:3]),
+                                  ('match', DATA_SAMPLE[3:5])))
+    matcher = dedupe.api.ActiveMatching(self.field_definition)
 
     matcher._addTrainingData(training_pairs)
     numpy.testing.assert_equal(matcher.training_data['label'],
-                               ['distinct', 'distinct', 'distinct', 
-                                'match', 'match'])
-    numpy.testing.assert_almost_equal(matcher.training_data['distances'],
-                                      numpy.array(
-                                        [[ 5.5, 5.0178],
-                                         [ 5.5, 3.4431],
-                                         [ 5.5, 3.7750],
-                                         [ 3.0, 5.125 ],
-                                         [ 5.5, 4.8333]]),
-                                      4)
+                               [b'distinct', b'distinct', b'distinct', 
+                                b'match', b'match'])
 
     matcher._addTrainingData(training_pairs)
     numpy.testing.assert_equal(matcher.training_data['label'],
-                               ['distinct', 'distinct', 'distinct', 
-                                'match', 'match']*2)
+                               [b'distinct', b'distinct', b'distinct', 
+                                b'match', b'match']*2)
 
-    numpy.testing.assert_almost_equal(matcher.training_data['distances'],
-                                      numpy.array(
-                                        [[ 5.5, 5.0178],
-                                         [ 5.5, 3.4431],
-                                         [ 5.5, 3.7750],
-                                         [ 3.0, 5.125 ],
-                                         [ 5.5, 4.8333]]*2),
-                                      4)
 
   def test_markPair(self) :
-    good_training_pairs = {'distinct' : DATA_SAMPLE[0:3],
-                      'match' : DATA_SAMPLE[3:5]}
+    from collections import OrderedDict
+    good_training_pairs = OrderedDict((('distinct',  DATA_SAMPLE[0:3]),
+                                       ('match', DATA_SAMPLE[3:5])))
     bad_training_pairs = {'non_dupes' : DATA_SAMPLE[0:3],
-                      'match' : DATA_SAMPLE[3:5]}
-    matcher = dedupe.api.ActiveMatching({ 'name' : {'type': 'String'}, 
-                                          'age'  : {'type': 'String'}})
+                          'match' : DATA_SAMPLE[3:5]}
+
+    matcher = dedupe.api.ActiveMatching(self.field_definition)
 
     self.assertRaises(ValueError, matcher.markPairs, bad_training_pairs)
 
     matcher.markPairs(good_training_pairs)
 
     numpy.testing.assert_equal(matcher.training_data['label'],
-                               ['distinct', 'distinct', 'distinct', 
-                                'match', 'match'])
-    numpy.testing.assert_almost_equal(matcher.training_data['distances'],
-                                      numpy.array(
-                                        [[ 5.5, 5.0178],
-                                         [ 5.5, 3.4431],
-                                         [ 5.5, 3.7750],
-                                         [ 3.0, 5.125 ],
-                                         [ 5.5, 4.8333]]),
-                                      4)
+                               [b'distinct', b'distinct', b'distinct', 
+                                b'match', b'match'])
 
     with warnings.catch_warnings(record=True) as w:
       warnings.simplefilter("always")
@@ -135,13 +122,14 @@ class ActiveMatch(unittest.TestCase) :
 class DedupeTest(unittest.TestCase):
   def setUp(self) : 
     random.seed(123) 
-    fields =  { 'name' : {'type': 'String'}, 
-                'age'  : {'type': 'String'},
-              }
-    self.deduper = dedupe.Dedupe(fields)
+    numpy.random.seed(456)
+
+    field_definition = [{'field' : 'name', 'type': 'String'}, 
+                        {'field' :'age', 'type': 'String'}]
+
+    self.deduper = dedupe.Dedupe(field_definition)
 
   def test_blockPairs(self) :
-    self.assertRaises(ValueError, self.deduper._blockedPairs, ((),))
     self.assertRaises(ValueError, self.deduper._blockedPairs, ({1:2},))
     self.assertRaises(ValueError, self.deduper._blockedPairs, ({'name':'Frank', 'age':21},))
     self.assertRaises(ValueError, self.deduper._blockedPairs, ({'1' : {'name' : 'Frank',
@@ -161,37 +149,42 @@ class DedupeTest(unittest.TestCase):
                   [(('1', {'age': 72, 'name': 'Frank'}, set([])), 
                     ('2', {'age': 27, 'name': 'Bob'}, set([])))]
 
-  def test_sample(self) :
-    data_sample = self.deduper._sample(
-      {'1' : {'name' : 'Frank', 'age' : '72'},
-       '2' : {'name' : 'Bob', 'age' : '27'},
-       '3' : {'name' : 'Jane', 'age' : '28'}}, 10)
+  def test_randomSample(self) :
 
+    random.seed(6)
+    numpy.random.seed(6)
+    self.deduper.sample(data_dict, 30, 1)
 
-    names = [(pair[0]['name'], pair[1]['name']) for pair in data_sample]
-    assert set(names) == set([("Frank", "Bob"), 
-                              ("Frank", "Jane"),
-                              ("Jane", "Bob")])
+    correct_result = [(dedupe.frozendict({'age': '50', 'name': 'Linda'}), 
+                       dedupe.frozendict({'age': '51', 'name': 'bob belcher'})), 
+                      (dedupe.frozendict({'age': '51', 'name': 'Bob'}), 
+                       dedupe.frozendict({'age': '51', 'name': 'Bob B.'})), 
+                      
+                      (dedupe.frozendict({'age': '51', 'name': 'Bob'}), 
+                       dedupe.frozendict({'age': '51', 'name': 'bob belcher'})), 
+                      (dedupe.frozendict({'age': '51', 'name': 'Bob B.'}), 
+                       dedupe.frozendict({'age': '51', 'name': 'bob belcher'})), 
+ 
+                      (dedupe.frozendict({'age': '50', 'name': 'Linda'}), 
+                       dedupe.frozendict({'age': '50', 'name': 'linda '}))]
 
-    self.deduper.sample({'1' : {'name' : 'Frank', 'age' : '72'},
-                         '2' : {'name' : 'Bob', 'age' : '27'},
-                         '3' : {'name' : 'Jane', 'age' : '28'}}, 10)
+    print(set(correct_result) - set(self.deduper.data_sample))
+    assert set(self.deduper.data_sample).issuperset(correct_result)
 
-    assert self.deduper.data_sample == data_sample
 
 
 
 
 class LinkTest(unittest.TestCase):
   def setUp(self) : 
-    random.seed(123) 
-    fields =  { 'name' : {'type': 'String'}, 
-                'age'  : {'type': 'String'},
-              }
-    self.linker = dedupe.RecordLink(fields)
+    random.seed(123)
+    numpy.random.seed(456)
+
+    field_definition = [{'field' : 'name', 'type': 'String'}, 
+                        {'field' :'age', 'type': 'String'}]
+    self.linker = dedupe.RecordLink(field_definition)
 
   def test_blockPairs(self) :
-    self.assertRaises(ValueError, self.linker._blockedPairs, ((),))
     self.assertRaises(ValueError, self.linker._blockedPairs, ({1:2},))
     self.assertRaises(ValueError, self.linker._blockedPairs, ({'name':'Frank', 'age':21},))
     self.assertRaises(ValueError, self.linker._blockedPairs, ({'1' : {'name' : 'Frank',
@@ -208,23 +201,35 @@ class LinkTest(unittest.TestCase):
                   [(('1', {'age': 72, 'name': 'Frank'}, set([])), 
                     ('2', {'age': 27, 'name': 'Bob'}, set([])))]
 
-  def test_sample(self) :
-    data_sample = self.linker._sample(
-      {'1' : {'name' : 'Frank', 'age' : '72'}},
-      {'2' : {'name' : 'Bob', 'age' : '27'},
-       '3' : {'name' : 'Jane', 'age' : '28'}}, 10)
+  def test_randomSample(self) :
 
-    names = [(pair[0]['name'], pair[1]['name']) for pair in data_sample]
-    assert set(names) == set([("Frank", "Bob"), ("Frank", "Jane")])
+    random.seed(27)
 
-    self.linker.sample({'1' : {'name' : 'Frank', 'age' : '72'}},
-                       {'2' : {'name' : 'Bob', 'age' : '27'},
-                        '3' : {'name' : 'Jane', 'age' : '28'}}, 10)
+    self.linker.sample( data_dict, data_dict_2, 50, 1)
 
-    assert self.linker.data_sample == data_sample
+    correct_result = [(dedupe.frozendict({'age': '51', 'name': 'Bob B.'}), 
+                       dedupe.frozendict({'age': '51', 'name': 'BOB'})), 
+                      (dedupe.frozendict({'age': '51', 'name': 'Bob B.'}), 
+                       dedupe.frozendict({'age': '51', 'name': 'BOB B.'})), 
+                      (dedupe.frozendict({'age': '51', 'name': 'Bob'}), 
+                       dedupe.frozendict({'age': '51', 'name': 'BOB B.'})), 
+                      (dedupe.frozendict({'age': '15', 'name': 'Tina'}), 
+                       dedupe.frozendict({'age': '15', 'name': 'TINA'}))]
 
-      
-      
+    assert set(self.linker.data_sample).issuperset(correct_result)
+
+    self.linker.sample(data_dict, data_dict_2, 5, 0)
+
+    correct_result = [(dedupe.frozendict({'age': '51', 'name': 'Bob B.'}), 
+                       dedupe.frozendict({'age': '15', 'name': 'TINA'})), 
+                      (dedupe.frozendict({'age': '51', 'name': 'Bob B.'}), 
+                       dedupe.frozendict({'age': '50', 'name': 'LINDA'})), 
+                      (dedupe.frozendict({'age': '12', 'name': 'Gene'}), 
+                       dedupe.frozendict({'age': '15', 'name': 'TINA'})), 
+                      (dedupe.frozendict({'age': '50', 'name': 'Linda'}), 
+                       dedupe.frozendict({'age': '50', 'name': 'LINDA '})), 
+                      (dedupe.frozendict({'age': '50', 'name': 'linda '}), 
+                       dedupe.frozendict({'age': '51', 'name': 'BOB BELCHER'}))]
 
 
 

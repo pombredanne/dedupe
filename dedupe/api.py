@@ -4,24 +4,24 @@
 dedupe provides the main user interface for the library the
 Dedupe class
 """
+from __future__ import print_function, division
+from future.utils import viewitems, viewvalues
 
-try:
-    import json
-except ImportError: 
-    import simplejson as json
 import itertools
 import logging
 import pickle
 import numpy
+import multiprocessing
 import random
 import warnings
 import copy
-try:
-    from collections import OrderedDict
-except ImportError :
-    from dedupe.backport import OrderedDict
+import os
+from collections import defaultdict, OrderedDict
+import simplejson as json
+import rlr
 
 import dedupe
+import dedupe.sampling as sampling
 import dedupe.core as core
 import dedupe.training as training
 import dedupe.serializer as serializer
@@ -30,9 +30,9 @@ import dedupe.predicates as predicates
 import dedupe.blocking as blocking
 import dedupe.clustering as clustering
 from dedupe.datamodel import DataModel
-import dedupe.centroid as centroid
 
 logger = logging.getLogger(__name__)
+
 
 class Matching(object):
     """
@@ -44,12 +44,10 @@ class Matching(object):
     - `thresholdBlocks`
     - `matchBlocks`
     """
-
     def __init__(self) :
-        self.matches = None
-        self.blocker = None
+        pass
 
-    def thresholdBlocks(self, blocks, recall_weight=1.5):
+    def thresholdBlocks(self, blocks, recall_weight=1.5): # pragma : nocover
         """
         Returns the threshold that maximizes the expected F score,
         a weighted average of precision and recall for a sample of
@@ -69,7 +67,7 @@ class Matching(object):
 
         probability = core.scoreDuplicates(self._blockedPairs(blocks), 
                                            self.data_model, 
-                                           self.num_processes)['score']
+                                           self.num_cores)['score']
 
         probability.sort()
         probability = probability[::-1]
@@ -90,7 +88,7 @@ class Matching(object):
 
         return probability[i]
 
-    def matchBlocks(self, blocks, threshold=.5, *args, **kwargs):
+    def matchBlocks(self, blocks, threshold=.5, *args, **kwargs): # pragma : no cover
         """
         Partitions blocked data and returns a list of clusters, where
         each cluster is a tuple of record ids
@@ -116,24 +114,32 @@ class Matching(object):
 
         candidate_records = self._blockedPairs(blocks)
         
-        self.matches = core.scoreDuplicates(candidate_records,
-                                            self.data_model,
-                                            self.num_processes,
-                                            threshold)
+        matches = core.scoreDuplicates(candidate_records,
+                                       self.data_model,
+                                       self.num_cores,
+                                       threshold)
 
-        logger.info("matching done, begin clustering")
+        logger.debug("matching done, begin clustering")
 
-        clusters = self._cluster(self.matches, 
+        clusters = self._cluster(matches, 
                                  cluster_threshold, *args, **kwargs)
+
+        try :
+            match_file = matches.filename
+            del matches
+            os.remove(match_file)
+        except AttributeError :
+            pass
         
         return clusters
 
     def _checkRecordType(self, record) :
-        for k in self.data_model.field_comparators :
-            if k not in record :
+        for field_comparator in self.data_model.field_comparators :
+            field = field_comparator[0]
+            if field not in record :
                 raise ValueError("Records do not line up with data model. "
                                  "The field '%s' is in data_model but not "
-                                 "in a record" % k)
+                                 "in a record" % field)
 
 
     def _logLearnedWeights(self): # pragma: no cover
@@ -143,9 +149,9 @@ class Matching(object):
         logger.info('Learned Weights')
         for (key_1, value_1) in self.data_model.items():
             try:
-                for (key_2, value_2) in value_1.items():
-                    logger.info((key_2, value_2.weight))
-            except AttributeError:
+                for field in value_1 :
+                    logger.info((field.name, field.weight))
+            except TypeError :
                 logger.info((key_1, value_1))
 
 
@@ -165,7 +171,6 @@ class DedupeMatching(Matching) :
     
     def __init__(self, *args, **kwargs) :
         super(DedupeMatching, self).__init__(*args, **kwargs)
-        self._Blocker = blocking.DedupeBlocker
         self._cluster = clustering.cluster
         self._linkage_type = "Dedupe"
 
@@ -229,65 +234,84 @@ class DedupeMatching(Matching) :
         block, blocks = core.peek(blocks)
         self._checkBlock(block)
 
-	combinations = itertools.combinations
+        combinations = itertools.combinations
 
         pairs = (combinations(block, 2) for block in blocks)
 
         return itertools.chain.from_iterable(pairs) 
 
     def _checkBlock(self, block) :
-        if not block :
-            raise ValueError("You have not provided any data blocks")
-        try :
-            if len(block[0]) < 3 :
+        if block :
+            try :
+                if len(block[0]) < 3 :
+                    raise ValueError("Each item in a block must be a "
+                                     "sequence of record_id, record, and smaller ids "
+                                     "and the records also must be dictionaries")
+            except :
                 raise ValueError("Each item in a block must be a "
                                  "sequence of record_id, record, and smaller ids "
                                  "and the records also must be dictionaries")
-        except :
-            raise ValueError("sandwich Each item in a block must be a "
-                             "sequence of record_id, record, and smaller ids "
-                             "and the records also must be dictionaries")
-        try :
-            block[0][1].items()
-            block[0][2].isdisjoint([])
-        except :
-            raise ValueError("The record must be a dictionary and "
-                             "smaller_ids must be a set")
+            try :
+                block[0][1].items()
+                block[0][2].isdisjoint([])
+            except :
+                raise ValueError("The record must be a dictionary and "
+                                 "smaller_ids must be a set")
 
         
-        self._checkRecordType(block[0][1])
+            self._checkRecordType(block[0][1])
 
     def _blockData(self, data_d):
 
-        blocks = OrderedDict({})
-        coverage = {}
+        blocks = defaultdict(dict)
 
-        for field in self.blocker.tfidf_fields :
-            self.blocker.tfIdfBlock(((record_id, record[field])
-                                     for record_id, record 
-                                     in data_d.iteritems()),
-                                    field)
+        for field in self.blocker.index_fields :
+            unique_fields = {record[field]
+                             for record 
+                             in viewvalues(data_d)
+                             if record[field]}
 
-        for block_key, record_id in self.blocker(data_d.iteritems()) :
-            blocks.setdefault(str(block_key), []).append((record_id, 
-                                                          data_d[record_id]))
+            self.blocker.index(unique_fields, field)
 
-        # Redundant-free Comparisons from Kolb et al, "Dedoop:
-        # Efficient Deduplication with Hadoop"
-        # http://dbs.uni-leipzig.de/file/Dedoop.pdf
-        for block_id, (block, records) in enumerate(blocks.iteritems()) :
-            for record_id, record in records :
-                coverage.setdefault(record_id, []).append(block_id)
+        for block_key, record_id in self.blocker(viewitems(data_d)) :
+            blocks[block_key][record_id] = data_d[record_id]
 
-        for block_id, (block_key, records) in enumerate(blocks.iteritems()) :
-            tuple_records = []
-            for record_id, record in records :
-                smaller_ids = set([covered_id for covered_id 
-                                   in coverage[record_id] 
-                                   if covered_id < block_id])
-                tuple_records.append((record_id, record, smaller_ids))
+        self.blocker.resetIndices()
 
-            yield tuple_records
+        blocks = (records for records in blocks.values()
+                  if len(records) > 1)
+        
+        blocks = {frozenset(d.keys()) : d for d in blocks}
+        blocks = blocks.values()
+
+        for block in self._redundantFree(blocks) :
+            yield block
+
+    def _redundantFree(self, blocks) :
+        """
+        Redundant-free Comparisons from Kolb et al, "Dedoop:
+        Efficient Deduplication with Hadoop"
+        http://dbs.uni-leipzig.de/file/Dedoop.pdf
+        """
+        coverage = defaultdict(list)
+
+        for block_id, records in enumerate(blocks) :
+
+            for record_id, record in viewitems(records) :
+                coverage[record_id].append(block_id)
+
+        for block_id, records in enumerate(blocks) :
+            if block_id % 10000 == 0 :
+                logger.info("%s blocks" % block_id)
+
+            marked_records = []
+            for record_id, record in viewitems(records) :
+                smaller_ids = {covered_id for covered_id 
+                               in coverage[record_id] 
+                               if covered_id < block_id}
+                marked_records.append((record_id, record, smaller_ids))
+
+            yield marked_records
 
 
 class RecordLinkMatching(Matching) :
@@ -308,10 +332,9 @@ class RecordLinkMatching(Matching) :
         super(RecordLinkMatching, self).__init__(*args, **kwargs)
 
         self._cluster = clustering.greedyMatching
-        self._Blocker = blocking.RecordLinkBlocker
         self._linkage_type = "RecordLink"
 
-    def match(self, data_1, data_2, threshold = 1.5) : # pragma : no cover
+    def match(self, data_1, data_2, threshold = 0.5) : # pragma : no cover
         """
         Identifies pairs of records that refer to the same entity, returns
         tuples containing a set of record ids and a confidence score as a float
@@ -348,17 +371,18 @@ class RecordLinkMatching(Matching) :
         data. 
 
         Arguments:
-        data_1        --  Dictionary of records from first dataset, where the keys 
-                          are record_ids and the values are dictionaries with the keys 
-                          being field names
+        data_1        --  Dictionary of records from first dataset, where the 
+                          keys are record_ids and the values are dictionaries 
+                          with the keys being field names
 
-        data_2        --  Dictionary of records from second dataset, same form as data_1
+        data_2        --  Dictionary of records from second dataset, same form 
+                          as data_1
 
         recall_weight -- Sets the tradeoff between precision and
                          recall. I.e. if you care twice as much about
                          recall as you do precision, set recall_weight
                          to 2.
-        """
+x        """
 
         blocked_pairs = self._blockData(data_1, data_2)
         return self.thresholdBlocks(blocked_pairs, recall_weight)
@@ -375,73 +399,74 @@ class RecordLinkMatching(Matching) :
         block, blocks = core.peek(blocks)
         self._checkBlock(block)
 
-	product = itertools.product
+        product = itertools.product
 
         pairs = (product(base, target) for base, target in blocks)
 
         return itertools.chain.from_iterable(pairs) 
         
     def _checkBlock(self, block) :
-        try :
-            base, target = block
-        except :
-            raise ValueError("Each block must be a made up of two "
-                             "sequences, (base_sequence, target_sequence)")
+        if block :
+            try :
+                base, target = block
+            except :
+                raise ValueError("Each block must be a made up of two "
+                                 "sequences, (base_sequence, target_sequence)")
 
-        if base :
-            if len(base[0]) < 3 :
-                raise ValueError("Each block must be a made up of two "
-                                 "sequences, (base_sequence, target_sequence)")
-            self._checkRecordType(base[0][1])
-        if target :
-            if len(target[0]) < 3 :
-                raise ValueError("Each block must be a made up of two "
-                                 "sequences, (base_sequence, target_sequence)")
-                
-            self._checkRecordType(target[0][1])
+            if base :
+                if len(base[0]) < 3 :
+                    raise ValueError("Each sequence must be made up of 3-tuple "
+                                     "like (record_id, record, covered_blocks)")
+                self._checkRecordType(base[0][1])
+            if target :
+                if len(target[0]) < 3 :
+                    raise ValueError("Each sequence must be made up of 3-tuple "
+                                     "like (record_id, record, covered_blocks)")
+                self._checkRecordType(target[0][1])
+
+    def _blockGenerator(self, messy_data, blocked_records) :
+        block_groups = itertools.groupby(self.blocker(viewitems(messy_data)), 
+                                         lambda x : x[1])
+
+        for i, (record_id, block_keys) in enumerate(block_groups) :
+            if i % 100 == 0 :
+                logger.info("%s records" % i)
+
+            A = [(record_id, messy_data[record_id], set())]
+
+            B = {}
+
+            for block_key, _ in block_keys :
+                if block_key in blocked_records :
+                    B.update(blocked_records[block_key])
+
+            B = [(rec_id, record, set())
+                 for rec_id, record
+                 in B.items()]
+
+            if B :
+                yield (A, B)
+
 
     def _blockData(self, data_1, data_2) :
 
-        blocks = OrderedDict({})
-        coverage = {}
+        blocked_records = defaultdict(dict)
 
-        for field in self.blocker.tfidf_fields :
-            fields_1 = ((record_id, record[field])
-                        for record_id, record 
-                        in data_1.iteritems())
-            fields_2 = ((record_id, record[field])
-                        for record_id, record 
-                        in data_2.iteritems())
+        for field in self.blocker.index_fields :
+            fields_2 = (record[field]
+                        for record 
+                        in viewvalues(data_2))
 
-            self.blocker.tfIdfBlock(fields_1, fields_2, field)
+            self.blocker.index(set(fields_2), field)
 
-
-        for block_key, record_id in self.blocker(data_1.items()) :
-            blocks.setdefault(block_key, ([], []))[0].append((record_id, 
-                                                              data_1[record_id]))
         for block_key, record_id in self.blocker(data_2.items()) :
-            if block_key in blocks :
-                blocks[block_key][1].append((record_id, data_2[record_id]))
+            blocked_records[block_key][record_id] = data_2[record_id]
 
-        blocks = blocks.values()
+        for each in self._blockGenerator(data_1, blocked_records) :
+            yield each
 
-        for block_id, sources in enumerate(blocks) :
-            for source in sources :
-                for record_id, record in source :
-                    coverage.setdefault(record_id, []).append(block_id)
+        self.blocker.resetIndices()
 
-        for block_id, sources in enumerate(blocks) :
-            tuple_block = []
-            for source in sources :
-                tuple_source = []
-                for record_id, record in source :
-                    smaller_ids = set([covered_id for covered_id 
-                                       in coverage[record_id] 
-                                       if covered_id < block_id])
-                    tuple_source.append((record_id, record, smaller_ids))
-                tuple_block.append(tuple_source)
-
-            yield tuple_block
 
 class StaticMatching(Matching) :
     """
@@ -453,7 +478,7 @@ class StaticMatching(Matching) :
 
     def __init__(self, 
                  settings_file, 
-                 num_processes=1) :
+                 num_cores=None) : # pragma : no cover
         """
         Initialize from a settings file
         #### Example usage
@@ -472,23 +497,32 @@ class StaticMatching(Matching) :
         learned from ActiveMatching. If you need details for this
         file see the method [`writeSettings`][[api.py#writesettings]].
         """
-        super(StaticMatching, self).__init__()
-
-
-        self.num_processes = num_processes
+        if num_cores is None :
+            self.num_cores = multiprocessing.cpu_count()
+        else :
+            self.num_cores = num_cores
 
         try:
             self.data_model = pickle.load(settings_file)
             self.predicates = pickle.load(settings_file)
             self.stop_words = pickle.load(settings_file)
-        except KeyError :
-            raise ValueError("The settings file doesn't seem to be in "
-                             "right format. You may want to delete the "
-                             "settings file and try again")
+        except (KeyError, AttributeError) :
+            raise ValueError("This settings file is not compatible with "
+                             "the current version of dedupe. This can happen "
+                             "if you have recently upgraded dedupe.")
+        except :
+            print("Something has gone wrong with loading the settings file")
+            raise
+                             
 
         self._logLearnedWeights()
         logger.info(self.predicates)
         logger.info(self.stop_words)
+
+        self.blocker = blocking.Blocker(self.predicates, 
+                                        self.stop_words)
+
+
 
 
 
@@ -508,20 +542,20 @@ class ActiveMatching(Matching) :
     """
 
     def __init__(self, 
-                 field_definition, 
+                 variable_definition, 
                  data_sample = None,
-                 num_processes = 1) :
+                 num_cores = None) :
         """
         Initialize from a data model and data sample.
 
         #### Example usage
 
             # initialize from a defined set of fields
-            fields = {'Site name': {'type': 'String'},
-                      'Address':   {'type': 'String'},
-                      'Zip':       {'type': 'String', 'Has Missing':True},
-                      'Phone':     {'type': 'String', 'Has Missing':True},
-                      }
+            fields = [{'field' : 'Site name', 'type': 'String'},
+                      {'field' : 'Address', 'type': 'String'},
+                      {'field' : 'Zip', 'type': 'String', 'Has Missing':True},
+                      {'field' : 'Phone', 'type': 'String', 'Has Missing':True},
+                     ]
 
             data_sample = [
                            (
@@ -542,26 +576,12 @@ class ActiveMatching(Matching) :
 
         
         #### Additional detail
-        A field definition is a dictionary where the keys are the fields
-        that will be used for training a model and the values are the
-        field specification
 
-        Field types include
+        A field definition is a list of dictionaries where each dictionary
+        describes a variable to use for comparing records. 
 
-        - String
-
-        A 'String' type field must have as its key a name of a field
-        as it appears in the data dictionary and a type declaration
-        ex. `{'Phone': {type: 'String'}}`
-
-        Longer example of a field definition:
-
-
-            fields = {'name':       {'type': 'String'},
-                      'address':    {'type': 'String'},
-                      'city':       {'type': 'String'},
-                      'cuisine':    {'type': 'String'}
-                      }
+        For details about variable types, check the documentation.
+        <http://dedupe.readthedocs.org>`_ 
 
         In the data_sample, each element is a tuple of two
         records. Each record is, in turn, a tuple of the record's key and
@@ -570,33 +590,34 @@ class ActiveMatching(Matching) :
         In in the record dictionary the keys are the names of the
         record field and values are the record values.
         """
-        super(ActiveMatching, self).__init__()
+        self.data_model = DataModel(variable_definition)
 
-        if field_definition.__class__ is not dict :
-            raise ValueError('Incorrect Input Type: must supply '
-                             'a field definition.')
-
-        self.data_model = DataModel(field_definition)
+        if num_cores is None :
+            self.num_cores = multiprocessing.cpu_count()
+        else :
+            self.num_cores = num_cores
 
         self.data_sample = data_sample
 
         if self.data_sample :
             self._checkDataSample(self.data_sample)
             self.activeLearner = training.ActiveLearning(self.data_sample, 
-                                                         self.data_model)
+                                                         self.data_model,
+                                                         self.num_cores)
         else :
+            self.data_sample = []
             self.activeLearner = None
-
-        self.num_processes = num_processes
-
 
         training_dtype = [('label', 'S8'), 
                           ('distances', 'f4', 
                            (len(self.data_model['fields']), ))]
 
         self.training_data = numpy.zeros(0, dtype=training_dtype)
-        self.training_pairs = dedupe.backport.OrderedDict({'distinct': [], 
-                                                           'match': []})
+        self.training_pairs = OrderedDict({u'distinct': [], 
+                                           u'match': []})
+
+        self.learner = rlr.lr
+        self.blocker = None
 
 
     def cleanupTraining(self) : # pragma : no cover
@@ -623,6 +644,9 @@ class ActiveMatching(Matching) :
         training_pairs = json.load(training_file, 
                                    cls=serializer.dedupe_decoder)
 
+        if not any(training_pairs.values()) :
+            raise EmptyTrainingException("The training file seems to contain no training examples")
+            
 
         for (label, examples) in training_pairs.items():
             if examples :
@@ -635,11 +659,10 @@ class ActiveMatching(Matching) :
 
         self._addTrainingData(training_pairs)
 
-        self._trainClassifier()
+        self._trainClassifier(0.1)
 
-    def train(self, ppc=.1, uncovered_dupes=1) :
-        """
-        Keyword arguments:
+    def train(self, ppc=.1, uncovered_dupes=1, index_predicates=True) : # pragma : no cover
+        """Keyword arguments:
         ppc -- Limits the Proportion of Pairs Covered that we allow a
                predicate to cover. If a predicate puts together a fraction
                of possible pairs greater than the ppc, that predicate will
@@ -660,8 +683,31 @@ class ActiveMatching(Matching) :
                            true dupe pair may mean that we have to use
                            blocks that put together many, many distinct pairs
                            that we'll have to expensively, compare as well.
+
+        index_predicates -- Should dedupe consider predicates that
+                            rely upon indexing the data. Index predicates can 
+                            be slower and take susbstantial memory.
+
+                            Defaults to True.
+
         """
-        n_folds = min(numpy.sum(self.training_data['label']=='match')/3,
+        self._trainClassifier()
+        self._trainBlocker(ppc, uncovered_dupes, index_predicates)
+
+    def _trainClassifier(self, alpha=None) : # pragma : no cover
+
+        if alpha is None :
+            alpha = self._regularizer()
+
+        self.data_model = core.trainModel(self.training_data,
+                                          self.data_model, 
+                                          self.learner,
+                                          alpha)
+
+        self._logLearnedWeights()
+
+    def _regularizer(self) :
+        n_folds = min(numpy.sum(self.training_data['label']==u'match')/3,
                       20)
         n_folds = max(n_folds,
                       2)
@@ -669,44 +715,37 @@ class ActiveMatching(Matching) :
         logger.info('%d folds', n_folds)
 
         alpha = crossvalidation.gridSearch(self.training_data,
-                                           core.trainModel, 
+                                           self.learner,
                                            self.data_model, 
+                                           self.num_cores,
                                            k=n_folds)
 
+        return alpha
 
-        self._trainClassifier(alpha)
-        self._trainBlocker(ppc, uncovered_dupes)
-
-
-    def _trainClassifier(self, alpha=.1) : # pragma : no cover
-
-        self.data_model = core.trainModel(self.training_data,
-                                          self.data_model, 
-                                          alpha)
-
-        self._logLearnedWeights()
 
     
-    def _trainBlocker(self, ppc=1, uncovered_dupes=1) :
+    def _trainBlocker(self, ppc=1, uncovered_dupes=1, index_predicates=True) : # pragma : no cover
         training_pairs = copy.deepcopy(self.training_pairs)
 
         confident_nonduplicates = training.semiSupervisedNonDuplicates(self.data_sample,
                                                                        self.data_model,
                                                                        sample_size=32000)
 
-        training_pairs['distinct'].extend(confident_nonduplicates)
+        training_pairs[u'distinct'].extend(confident_nonduplicates)
 
-        predicate_set = predicateGenerator(self.data_model)
+        predicate_set = predicateGenerator(self.data_model, 
+                                           index_predicates,
+                                           self.canopies)
 
         (self.predicates, 
-         self.stop_words) = dedupe.blocking.blockTraining(training_pairs,
+         self.stop_words) = dedupe.training.blockTraining(training_pairs,
                                                           predicate_set,
                                                           ppc,
                                                           uncovered_dupes,
                                                           self._linkage_type)
 
-        self.blocker = self._Blocker(self.predicates,
-                                     self.stop_words) 
+        self.blocker = blocking.Blocker(self.predicates,
+                                        self.stop_words) 
 
 
     def writeSettings(self, file_obj): # pragma : no cover
@@ -733,33 +772,44 @@ class ActiveMatching(Matching) :
         json.dump(self.training_pairs, 
                   file_obj, 
                   default=serializer._to_json,
-                  ensure_ascii=False)
+                  tuple_as_array=False,
+                  ensure_ascii=True)
 
 
     def uncertainPairs(self) :
         '''
-        Provides a list of the pairs of records that dedupe is most curious to learn 
-        if they are matches or distinct.
+        Provides a list of the pairs of records that dedupe is most
+        curious to learn if they are matches or distinct.
         
         Useful for user labeling.
+
         '''
         
         
         if self.training_data.shape[0] == 0 :
-            rand_int = random.randint(0, len(self.data_sample))
+            rand_int = random.randint(0, len(self.data_sample)-1)
             random_pair = self.data_sample[rand_int]
             exact_match = (random_pair[0], random_pair[0]) 
-            self._addTrainingData({'match':[exact_match, exact_match],
-                                   'distinct':[]})
+            self._addTrainingData({u'match':[exact_match, exact_match],
+                                   u'distinct':[]})
 
 
-            self._trainClassifier(alpha=0.1)
+        self._trainClassifier(0.1)
 
-        
-        dupe_ratio = (len(self.training_pairs['match'])
-                      /(len(self.training_pairs['distinct']) + 1.0))
+        bias = len(self.training_pairs[u'match'])
+        if bias :
+            bias /= (bias
+                     + len(self.training_pairs[u'distinct']))
 
-        return self.activeLearner.uncertainPairs(self.data_model, dupe_ratio)
+        min_examples = min(len(self.training_pairs[u'match']),
+                           len(self.training_pairs[u'distinct']))
+
+        regularizer = 10 
+
+        bias = ((0.5 * min_examples + bias * regularizer)
+                /(min_examples + regularizer))
+
+        return self.activeLearner.uncertainPairs(self.data_model, bias)
 
     def markPairs(self, labeled_pairs) :
         '''
@@ -774,21 +824,21 @@ class ActiveMatching(Matching) :
         '''
         try :
             labeled_pairs.items()
-            labeled_pairs['match']
-            labeled_pairs['distinct']
+            labeled_pairs[u'match']
+            labeled_pairs[u'distinct']
         except :
             raise ValueError('labeled_pairs must be a dictionary with keys '
                              '"distinct" and "match"')
 
-        if labeled_pairs['match'] :
-            pair = labeled_pairs['match'][0]
+        if labeled_pairs[u'match'] :
+            pair = labeled_pairs[u'match'][0]
             self._checkRecordPairType(pair)
         
-        if labeled_pairs['distinct'] :
-            pair = labeled_pairs['distinct'][0]
+        if labeled_pairs[u'distinct'] :
+            pair = labeled_pairs[u'distinct'][0]
             self._checkRecordPairType(pair)
         
-        if not labeled_pairs['distinct'] and not labeled_pairs['match'] :
+        if not labeled_pairs[u'distinct'] and not labeled_pairs[u'match'] :
             warnings.warn("Didn't return any labeled record pairs")
         
 
@@ -796,8 +846,6 @@ class ActiveMatching(Matching) :
             self.training_pairs[label].extend(core.freezeData(pairs))
 
         self._addTrainingData(labeled_pairs) 
-
-        self._trainClassifier(alpha=.1)
 
 
 
@@ -855,17 +903,15 @@ class ActiveMatching(Matching) :
                                               new_data)
 
 
-
-    def _loadSample(self, *args, **kwargs) : # pragma : no cover
-
-        data_sample = self._sample(*args, **kwargs)
+    def _loadSample(self, data_sample) :
 
         self._checkDataSample(data_sample) 
 
         self.data_sample = data_sample
 
         self.activeLearner = training.ActiveLearning(self.data_sample, 
-                                                     self.data_model)
+                                                     self.data_model,
+                                                     self.num_cores)
 
 
 
@@ -874,12 +920,6 @@ class StaticDedupe(DedupeMatching, StaticMatching) :
     Mixin Class for Static Deduplication
     """
 
-    def __init__(self, *args, **kwargs) :
-        super(StaticDedupe, self).__init__(*args, **kwargs)
-
-        self.blocker = self._Blocker(self.predicates, 
-                                     self.stop_words)
-
 class Dedupe(DedupeMatching, ActiveMatching) :
     """
     Mixin Class for Active Learning Deduplication
@@ -887,50 +927,56 @@ class Dedupe(DedupeMatching, ActiveMatching) :
     Public Methods
     - sample
     """
+    canopies = True
 
-    
-    def sample(self, data, sample_size=150000) :
+    def sample(self, data, sample_size=15000, 
+               blocked_proportion=0.5) :
+        '''Draw a sample of record pairs from the dataset
+        (a mix of random pairs & pairs of similar records)
+        and initialize active learning with this sample
+        
+        Arguments: data -- Dictionary of records, where the keys are
+        record_ids and the values are dictionaries with the keys being
+        field names
+        
+        sample_size         -- Size of the sample to draw
+        blocked_proportion  -- Proportion of the sample that will be blocked
         '''
-        Draw a random sample of combinations of records from 
-        the the dataset, and initialize active learning with this sample
-        
-        Arguments:
-        data        -- Dictionary of records, where the keys are record_ids 
-                       and the values are dictionaries with the keys being 
-                       field names
-        
-        sample_size -- Size of the sample to draw
-        '''
-        
-        self._loadSample(data, sample_size)
+        data = core.index(data)
 
-    def _sample(self, data, sample_size) :
-
-        indexed_data = dict((i, dedupe.core.frozendict(v)) 
-                            for i, v in enumerate(data.values()))
-
-        random_pairs = dedupe.core.randomPairs(len(indexed_data), 
-                                               sample_size)
-
-        data_sample = tuple((indexed_data[int(k1)], 
-                             indexed_data[int(k2)]) 
-                            for k1, k2 in random_pairs)
-
-        return data_sample
+        blocked_sample_size = int(blocked_proportion * sample_size)
+        predicates = list(predicateGenerator(self.data_model, 
+                                             index_predicates=False,
+                                             canopies=self.canopies))
 
 
+        data = sampling.randomDeque(data)
+        blocked_sample_keys = sampling.dedupeBlockedSample(blocked_sample_size,
+                                                           predicates,
+                                                           data)
+
+        random_sample_size = sample_size - len(blocked_sample_keys)
+        random_sample_keys = set(dedupe.core.randomPairs(len(data),
+                                                         random_sample_size))
+        data = dict(data)
+
+        data_sample = [(data[k1], data[k2])
+                       for k1, k2 
+                       in blocked_sample_keys | random_sample_keys]
+
+        data_sample = core.freezeData(data_sample)
+
+        # data can be a very large object, so we'll free it up as soon
+        # as possible
+        del data
+
+        self._loadSample(data_sample)
 
 
 class StaticRecordLink(RecordLinkMatching, StaticMatching) :
     """
     Mixin Class for Static Record Linkage
     """
-
-    def __init__(self, *args, **kwargs) :
-        super(StaticRecordLink, self).__init__(*args, **kwargs)
-
-        self.blocker = self._Blocker(self.predicates, 
-                                     self.stop_words)
 
 class RecordLink(RecordLinkMatching, ActiveMatching) :
     """
@@ -939,8 +985,10 @@ class RecordLink(RecordLinkMatching, ActiveMatching) :
     Public Methods
     - sample
     """
+    canopies = False
 
-    def sample(self, data_1, data_2, sample_size=150000) :
+    def sample(self, data_1, data_2, sample_size=150000, 
+               blocked_proportion=.5) :
         '''
         Draws a random sample of combinations of records from 
         the first and second datasets, and initializes active
@@ -956,25 +1004,51 @@ class RecordLink(RecordLinkMatching, ActiveMatching) :
         
         sample_size -- Size of the sample to draw
         '''
+        if len(data_1) == 0:
+            raise ValueError('Dictionary of records from first dataset is empty.')
+        elif len(data_2) == 0:
+            raise ValueError('Dictionary of records from second dataset is empty.')
+
+        if len(data_1) > len(data_2) :
+            data_1, data_2 = data_2, data_1
+
+        data_1 = core.index(data_1)
+
+        offset = len(data_1)
+        data_2 = core.index(data_2, offset)
+
+        blocked_sample_size = int(blocked_proportion * sample_size)
+        predicates = list(predicateGenerator(self.data_model, 
+                                             index_predicates=False,
+                                             canopies=self.canopies))
+
+        data_1 = sampling.randomDeque(data_1)
+        data_2 = sampling.randomDeque(data_2)
+
+        blocked_sample_keys = sampling.linkBlockedSample(blocked_sample_size,
+                                                         predicates,
+                                                         data_1, 
+                                                         data_2)
         
-        self._loadSample(data_1, data_2, sample_size)
+        random_sample_size = sample_size - len(blocked_sample_keys)
+        random_sample_keys = dedupe.core.randomPairsMatch(len(data_1),
+                                                          len(data_2), 
+                                                          random_sample_size)
 
-    def _sample(self, data_1, data_2, sample_size) :
+        random_sample_keys = {(a, b + offset) 
+                              for a, b in random_sample_keys}
 
-        d_1 = dict((i, dedupe.core.frozendict(v)) 
-                    for i, v in enumerate(data_1.values()))
-        d_2 = dict((i, dedupe.core.frozendict(v)) 
-                   for i, v in enumerate(data_2.values()))
-
-        random_pairs = dedupe.core.randomPairsMatch(len(d_1),
-                                                    len(d_2), 
-                                                    sample_size)
+        data_1 = dict(data_1)
+        data_2 = dict(data_2)
         
-        data_sample = tuple((d_1[int(k1)], 
-                             d_2[int(k2)]) 
-                            for k1, k2 in random_pairs)
+        data_sample = ((data_1[k1], data_2[k2])
+                       for k1, k2 
+                       in blocked_sample_keys | random_sample_keys)
 
-        return data_sample
+        data_sample = core.freezeData(data_sample)
+
+        self._loadSample(data_sample)
+
 
 class GazetteerMatching(RecordLinkMatching) :
     
@@ -983,8 +1057,42 @@ class GazetteerMatching(RecordLinkMatching) :
 
         self._cluster = clustering.gazetteMatching
         self._linkage_type = "GazetteerMatching"
+        self.blocked_records = OrderedDict({})
 
-    def match(self, data_1, data_2, threshold = 1.5, n_matches = 1) : # pragma : no cover
+
+    def _blockData(self, messy_data) :
+        for each in self._blockGenerator(messy_data, self.blocked_records) :
+            yield each
+
+
+    def index(self, data) : # pragma : no cover
+
+        for field in self.blocker.index_fields :
+            self.blocker.index((record[field]
+                                for record 
+                                in viewvalues(data)),
+                               field)
+
+        for block_key, record_id in self.blocker(data.items()) :
+            if block_key not in self.blocked_records :
+                self.blocked_records[block_key] = {}
+            self.blocked_records[block_key][record_id] = data[record_id]
+
+    def unindex(self, data) : # pragma : no cover
+
+        for field in self.blocker.index_fields :
+            self.blocker.unindex((record[field]
+                                  for record 
+                                  in viewvalues(data)),
+                                 field)
+
+        for block_key, record_id in self.blocker(viewitems(data)) :
+            try : 
+                del self.blocked_records[block_key][record_id]
+            except KeyError :
+                pass 
+        
+    def match(self, messy_data, threshold = 0.5, n_matches = 1) : # pragma : no cover
         """Identifies pairs of records that refer to the same entity, returns
         tuples containing a set of record ids and a confidence score as a float
         between 0 and 1. The record_ids within each set should refer to the 
@@ -995,13 +1103,10 @@ class GazetteerMatching(RecordLinkMatching) :
         for larger data, use matchBlocks
         
         Arguments:
-        data_1    -- Dictionary of records from first dataset, where the 
-                     keys are record_ids and the values are dictionaries
-                     with the keys being field names
+        messy_data -- Dictionary of records from messy dataset, where the 
+                      keys are record_ids and the values are dictionaries with 
+                      the keys being field names
 
-        data_2    -- Dictionary of records from second dataset, same form 
-                     as data_1
-                                          
         threshold -- Number between 0 and 1 (default is .5). We will consider
                      records as potential duplicates if the predicted 
                      probability of being a duplicate is above the threshold.
@@ -1009,11 +1114,11 @@ class GazetteerMatching(RecordLinkMatching) :
                      Lowering the number will increase recall, raising it
                      will increase precision
         
-        n_matches -- Maximum number of possible matches from data_2
-                     for each record in data_1
+        n_matches -- Maximum number of possible matches from the canonical 
+                     record set to match against each record in the messy
+                     record set
         """
-        self._cluster = clustering.gazetteMatching
-        blocked_pairs = self._blockData(data_1, data_2)
+        blocked_pairs = self._blockData(messy_data)
         return self.matchBlocks(blocked_pairs, threshold, n_matches)
 
 class Gazetteer(RecordLink, GazetteerMatching):
@@ -1022,9 +1127,22 @@ class Gazetteer(RecordLink, GazetteerMatching):
 class StaticGazetteer(StaticRecordLink, GazetteerMatching):
     pass
 
-def predicateGenerator(data_model) :
-    predicates = []
-    for field, definition in data_model['fields'].items() :
-        predicates.extend(definition.predicates)
+def predicateGenerator(data_model, index_predicates, canopies) :
+    predicates = set()
+    for definition in data_model.primary_fields :
+        for predicate in definition.predicates :
+            if hasattr(predicate, 'index') :
+                if index_predicates :
+                    if hasattr(predicate, 'canopy') :
+                        if canopies :
+                            predicates.add(predicate)
+                    else :
+                        if not canopies :
+                            predicates.add(predicate)
+            else :
+                predicates.add(predicate)
 
     return predicates
+
+class EmptyTrainingException(Exception) :
+    pass
