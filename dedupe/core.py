@@ -1,28 +1,88 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
-from builtins import range, next, zip
+from builtins import range, next, zip, map
 from future.utils import viewvalues
 import sys
 if sys.version < '3':
     text_type = unicode
     binary_type = str
+    shelve_key = lambda x: x.encode()
+    int_type = long
 else:
     text_type = str
     binary_type = bytes
     unicode = str
+    shelve_key = lambda x: x
+    int_type = int
 
 import itertools
-import warnings
-import numpy
-import collections
 import time
 import tempfile
 import os
+import operator
+import random
+import collections
+import warnings
+import shutil
+import shelve
+import pickle
+import functools
 
-import dedupe.backport as backport
+
+try:
+    import collections.abc as collections_abc
+except ImportError:
+    import collections as collections_abc
+
+import numpy
 
 class ChildProcessError(Exception) :
     pass
+
+class BlockingError(Exception):
+    pass
+
+def randomPairs(n_records, sample_size):
+    """
+    Return random combinations of indices for a square matrix of size n
+    records. For a discussion of how this works see
+    http://stackoverflow.com/a/14839010/98080
+
+    """
+    n = int(n_records * (n_records - 1) / 2)
+
+    if sample_size >= n :
+        random_pairs = numpy.arange(n, dtype='uint')
+    else:
+        try:
+            random_pairs = numpy.array(random.sample(range(n), sample_size),
+                                       dtype='uint')
+        except OverflowError:
+            return randomPairsWithReplacement(n_records, sample_size)
+            
+    
+    b = 1 - 2 * n_records
+
+    i = numpy.floor((-b - 2 * numpy.sqrt(2 * (n - random_pairs) + 0.25)) / 2).astype('uint')
+    j = numpy.rint(random_pairs + i * (b + i + 2) / 2 + 1).astype('uint')
+
+    return zip(i, j)
+
+def randomPairsMatch(n_records_A, n_records_B, sample_size):
+    """
+    Return random combinations of indices for record list A and B
+    """
+    n = int(n_records_A * n_records_B)
+
+    if sample_size >= n:
+        random_pairs = numpy.arange(n)
+    else:
+        random_pairs = numpy.array(random.sample(range(n), sample_size),
+                                   dtype=int)
+
+    i, j = numpy.unravel_index(random_pairs, (n_records_A, n_records_B))
+
+    return zip(i, j)
 
 def randomPairsWithReplacement(n_records, sample_size) :
     # If the population is very large relative to the sample
@@ -32,12 +92,11 @@ def randomPairsWithReplacement(n_records, sample_size) :
     try :
         random_indices = numpy.random.randint(n_records, 
                                               size=sample_size*2)
-    except OverflowError:
+    except (OverflowError, ValueError):
         max_int = numpy.iinfo('int').max
         warnings.warn("Asked to sample pairs from %d records, will only sample pairs from first %d records" % (n_records, max_int))
         random_indices = numpy.random.randint(max_int, 
                                               size=sample_size*2)
-
 
         
     random_indices = random_indices.reshape((-1, 2))
@@ -46,146 +105,10 @@ def randomPairsWithReplacement(n_records, sample_size) :
     return [(p.item(), q.item()) for p, q in random_indices]
 
 
-def randomPairs(n_records, sample_size):
-    """
-    Return random combinations of indices for a square matrix of size
-    n records
-    """
-
-    if n_records < 2 :
-        raise ValueError("Needs at least two records")
-    n = n_records * (n_records - 1) / 2
-
-    # numpy doesn't always throw an overflow error so we need to 
-    # check to make sure that the largest number we'll use is smaller
-    # than the numpy's maximum unsigned integer
-    if 8 * n > numpy.iinfo('uint').max :
-        return randomPairsWithReplacement(n_records, sample_size)
-
-    if sample_size >= n:
-        if sample_size > n :
-            warnings.warn("Requested sample of size %d, only returning %d possible pairs" % (sample_size, n))
-
-        random_indices = numpy.arange(n)
-    else :
-        random_indices = numpy.random.randint(int(n), size=sample_size)
-
-    random_indices = random_indices.astype('uint')
-
-    b = 1 - 2 * n_records
-
-    x = numpy.trunc((-b - numpy.sqrt(b ** 2 - 8 * random_indices)) / 2)
-    y = random_indices + x * (b + x + 2) / 2 + 1
-
-    stacked = numpy.column_stack((x, y)).astype(int)
-
-    return [(p.item(), q.item()) for p, q in stacked]
-
-def randomPairsMatch(n_records_A, n_records_B, sample_size):
-    """
-    Return random combinations of indices for record list A and B
-    """
-    if not n_records_A or not n_records_B :
-        raise ValueError("There must be at least one record in A and in B")
-
-    if sample_size >= n_records_A * n_records_B :
-
-        if sample_size > n_records_A * n_records_B :
-            warnings.warn("Requested sample of size %d, only returning %d possible pairs" % (sample_size, n_records_A * n_records_B))
-
-        return cartesian((numpy.arange(n_records_A),
-                          numpy.arange(n_records_B)))
-
-    A_samples = numpy.random.randint(n_records_A, size=sample_size)
-    B_samples = numpy.random.randint(n_records_B, size=sample_size)
-    pairs = zip(A_samples,B_samples)
-    set_pairs = set(pairs)
-
-    while len(set_pairs) < sample_size:
-        set_pairs.update(randomPairsMatch(n_records_A,
-                                          n_records_B,
-                                          (sample_size-len(set_pairs))))
-    else:
-        return set_pairs
-
-
-def trainModel(training_data, data_model, learner=None, alpha=.001):
-    """
-    Use logistic regression to train weights for all fields in the data model
-    """
-    
-    labels = numpy.array(training_data['label'] == b'match', dtype='i4')
-    examples = training_data['distances']
-
-    weight, bias = learner(labels, examples, alpha)
-
-    for i, field_definition in enumerate(data_model['fields']) :
-        field_definition.weight = float(weight[i])
-
-    data_model['bias'] = bias
-
-    return data_model
-
-def fieldDistances(record_pairs, data_model=None):
-    num_records = len(record_pairs)
-
-    distances = numpy.empty((num_records, data_model.n_fields))
-    field_comparators = data_model.field_comparators
-
-    for i, (record_1, record_2) in enumerate(record_pairs) :
-        
-        for field, compare, start, stop in field_comparators :
-            if record_1[field] is not None and record_2[field] is not None :
-                distances[i,start:stop] = compare(record_1[field],
-                                                  record_2[field])
-            elif hasattr(compare, 'missing') :
-                distances[i,start:stop] = compare(record_1[field],
-                                                  record_2[field])
-            else :
-                distances[i,start:stop] = numpy.nan
-
-    
-    distances = derivedDistances(distances, data_model)
-
-    return distances
-
-def derivedDistances(primary_distances, data_model) :
-    distances = primary_distances
-
-    current_column = data_model.derived_start
-
-    for interaction in data_model.interactions :
-        distances[:,current_column] =\
-                numpy.prod(distances[:,interaction], axis=1)
-
-        current_column += 1
-
-    missing_data = numpy.isnan(distances[:,:current_column])
-
-    distances[:,:current_column][missing_data] = 0
-
-    if data_model.missing_field_indices :
-        distances[:,current_column:] =\
-            1 - missing_data[:,data_model.missing_field_indices]
-
-    return distances
-
-
-def scorePairs(field_distances, data_model):
-    fields = data_model['fields']
-
-    field_weights = [field.weight for field in fields]
-    bias = data_model['bias']
-
-    scores = numpy.dot(field_distances, field_weights)
-
-    scores = numpy.exp(scores + bias) / (1 + numpy.exp(scores + bias))
-
-    return scores
-
-class ScoreRecords(object) :
-    def __init__(self, data_model, threshold) :
+class ScoreDupes(object) :
+    def __init__(self, data_model, classifier, threshold) :
         self.data_model = data_model
+        self.classifier = classifier
         self.threshold = threshold
         self.score_queue = None
 
@@ -214,77 +137,93 @@ class ScoreRecords(object) :
             ((id_1, record_1, smaller_ids_1), 
              (id_2, record_2, smaller_ids_2)) = record_pair
 
-            if set.isdisjoint(smaller_ids_1, smaller_ids_2) :
+            if smaller_ids_1.isdisjoint(smaller_ids_2) :
                 
                 ids.append((id_1, id_2))
                 records.append((record_1, record_2))
 
         if records :
-            distances = fieldDistances(records, self.data_model)
-            scores = scorePairs(distances, self.data_model)
-
-            scored_pairs = numpy.rec.fromarrays((ids, scores),
-                                                dtype= [('pairs', 'object', 2), 
-                                                        ('score', 'f4', 1)])
             
-            filtered_pairs = scored_pairs[scores > self.threshold]
+            distances = self.data_model.distances(records)
+            scores = self.classifier.predict_proba(distances)[:,-1]
 
-            return filtered_pairs
+            mask = scores > self.threshold
+            if mask.any():
+                id_type = sniff_id_type(ids)
+                ids = numpy.array(ids, dtype=id_type)
+
+                dtype = numpy.dtype([('pairs', id_type, 2), 
+                                     ('score', 'f4', 1)])
+
+                temp_file, file_path = tempfile.mkstemp()
+                os.close(temp_file)
+
+                scored_pairs = numpy.memmap(file_path,
+                                            shape=numpy.count_nonzero(mask),
+                                            dtype=dtype)
+
+                scored_pairs['pairs'] = ids[mask]
+                scored_pairs['score'] = scores[mask]
+
+                return file_path, dtype
 
 def mergeScores(score_queue, result_queue, stop_signals) :
-    scored_pairs = numpy.empty(0, dtype= [('pairs', 'object', 2), 
-                                          ('score', 'f4', 1)])
+    scored_pairs_file, file_path = tempfile.mkstemp()
+    os.close(scored_pairs_file)
 
     seen_signals = 0
+    end = 0
+
     while seen_signals < stop_signals  :
+
         score_chunk = score_queue.get()
+
         if isinstance(score_chunk, Exception) :
             result_queue.put(score_chunk)
-            return
-
-        if score_chunk is not None :
-            scored_pairs = numpy.concatenate((scored_pairs, score_chunk))
-        else :
+            raise
+        elif score_chunk is None:
             seen_signals += 1
+        else:
+            score_file, dtype = score_chunk
+            score_chunk = numpy.memmap(score_file, mode='r', dtype=dtype)
 
-    if len(scored_pairs) :
-        python_type = type(scored_pairs['pairs'][0][0])
-        if python_type is binary_type or python_type is text_type :
-            max_length = len(max(numpy.ravel(scored_pairs['pairs']), key=len))
-            python_type = (unicode, max_length)
-        
-        write_dtype = [('pairs', python_type, 2),
-                       ('score', 'f4', 1)]
+            chunk_size = len(score_chunk)
 
-        scored_pairs = scored_pairs.astype(write_dtype)
+            fp = numpy.memmap(file_path, dtype=dtype,
+                              offset=(end * dtype.itemsize),
+                              shape=(chunk_size, ))
 
-        scored_pairs_file, file_path = tempfile.mkstemp()
-        
-        os.close(scored_pairs_file)
+            fp[:chunk_size] = score_chunk
 
-        fp = numpy.memmap(file_path, 
-                          dtype=scored_pairs.dtype, 
-                          shape=scored_pairs.shape)
-        fp[:] = scored_pairs[:]
+            end += chunk_size
 
-        result_queue.put((file_path, scored_pairs.dtype))
+            del score_chunk
+            os.remove(score_file)
 
-    else :
-        result_queue.put(scored_pairs)
+    if end:
+        result_queue.put((file_path, dtype, end))
+    else:
+        result_queue.put(None)
 
-def scoreDuplicates(records, data_model, num_cores=1, threshold=0) :
+def scoreDuplicates(records, data_model, classifier, num_cores=1, threshold=0) :
     if num_cores < 2 :
-        from multiprocessing.dummy import Process, Pool, Queue
+        from multiprocessing.dummy import Process, Queue
         SimpleQueue = Queue
     else :
-        from .backport import Process, Pool, SimpleQueue
+        from .backport import Process, SimpleQueue, Queue
 
-    record_pairs_queue = SimpleQueue()
+    first, records = peek(records)
+    if first is None:
+        raise BlockingError("No records have been blocked together. "
+                            "Is the data you are trying to match like "
+                            "the data you trained on?")
+
+    record_pairs_queue = Queue(2)
     score_queue =  SimpleQueue()
     result_queue = SimpleQueue()
 
-    n_map_processes = max(num_cores-1, 1)
-    score_records = ScoreRecords(data_model, threshold) 
+    n_map_processes = max(num_cores, 1)
+    score_records = ScoreDupes(data_model, classifier, threshold)
     map_processes = [Process(target=score_records,
                              args=(record_pairs_queue,
                                    score_queue))
@@ -304,19 +243,22 @@ def scoreDuplicates(records, data_model, num_cores=1, threshold=0) :
         raise ChildProcessError
 
     if result :
-        scored_pairs_file, dtype = result
+        scored_pairs_file, dtype, size = result
         scored_pairs = numpy.memmap(scored_pairs_file,
-                                    dtype=dtype)
-    else :
-        scored_pairs = result
+                                    dtype=dtype,
+                                    shape=(size,))
+    else:
+        scored_pairs = numpy.array([], dtype=dtype)
+
+    reduce_process.join()
+    [process.join() for process in map_processes]
 
     return scored_pairs
 
-
-
 def fillQueue(queue, iterable, stop_signals) :
     iterable = iter(iterable)
-    chunk_size = 100000
+    chunk_size = 10000
+    upper_bound = 7000000 # this number worked, but is unprincipled 
     multiplier = 1.1
 
     # initial values
@@ -326,10 +268,11 @@ def fillQueue(queue, iterable, stop_signals) :
     last_rate = 10000
 
     while True :
-        chunk = list(itertools.islice(iterable, int(chunk_size)))
+        chunk = tuple(itertools.islice(iterable, int(chunk_size)))
         if chunk :
             queue.put(chunk)
-
+            del chunk
+            
             n_records += chunk_size
             i += 1
 
@@ -345,7 +288,7 @@ def fillQueue(queue, iterable, stop_signals) :
                 if current_rate < last_rate :
                     multiplier = 1/multiplier
 
-                chunk_size = max(chunk_size * multiplier, 1)
+                chunk_size = min(max(chunk_size * multiplier, 1), upper_bound)
 
                 last_rate = current_rate
                 n_records = 0
@@ -357,6 +300,61 @@ def fillQueue(queue, iterable, stop_signals) :
             # done
             [queue.put(None) for _ in range(stop_signals)]
             break
+
+class ScoreGazette(object) :
+    def __init__(self, data_model, classifier, threshold) :
+        self.data_model = data_model
+        self.classifier = classifier
+        self.threshold = threshold
+
+    def __call__(self, block):
+        ids = []
+        records = []
+
+        for record_pair in block:
+            ((id_1, record_1, _), 
+             (id_2, record_2, _)) = record_pair
+
+            ids.append((id_1, id_2))
+            records.append((record_1, record_2))
+
+        distances = self.data_model.distances(records)
+        scores = self.classifier.predict_proba(distances)[:,-1]
+
+        mask = scores > self.threshold
+        id_type = sniff_id_type(ids)
+        ids = numpy.array(ids, dtype=id_type)
+
+        dtype = numpy.dtype([('pairs', id_type, 2),
+                             ('score', 'f4', 1)])
+
+        scored_pairs = numpy.empty(shape=numpy.count_nonzero(mask),
+                                   dtype=dtype)
+
+        scored_pairs['pairs'] = ids[mask]
+        scored_pairs['score'] = scores[mask]
+
+        return scored_pairs
+
+
+def scoreGazette(records, data_model, classifier, num_cores=1, threshold=0) :
+    if num_cores < 2 :
+        imap = map
+    else :
+        from .backport import Pool
+        n_map_processes = max(num_cores, 1)
+        pool = Pool(processes=n_map_processes)
+        imap = functools.partial(pool.imap_unordered, chunksize=1)
+
+    first, records = peek(records)
+    if first is None:
+        raise ValueError("No records to match")
+
+    score_records = ScoreGazette(data_model, classifier, threshold)
+
+    for scored_pairs in imap(score_records, records):
+        yield scored_pairs
+
 
 def peek(records) :
     try :
@@ -377,103 +375,72 @@ def peek(records) :
     return record, itertools.chain([record], records)
 
 
-def freezeData(data) : # pragma : no cover
-    lfrozendict = frozendict
-    return [(lfrozendict(record_1), 
-             lfrozendict(record_2))
-            for record_1, record_2 in data]
-
 def isIndexed(data, offset) :
-    hashable = collections.Hashable
-    for i in range(offset, offset + len(data)) :
-        if i not in data :
-            return False
-    else :
-        return True
+    return all(i in data for i in range(offset, offset + len(data)))
 
 def index(data, offset=0) :
-    if isIndexed(data, offset) :
+    if isIndexed(data, offset):
         return data
     else :
         data = dict(zip(itertools.count(offset), 
                         viewvalues(data)))
         return data
 
+def iunzip(iterable, internal_length): # pragma: no cover
+    """Iunzip is the same as zip(*iter) but returns iterators, instead of 
+    expand the iterator. Mostly used for large sequence"""
 
-class frozendict(collections.Mapping):
-    """Don't forget the docstrings!!"""
+    _tmp, iterable = itertools.tee(iterable, 2)
+    iters = itertools.tee(iterable, internal_length)
+    return (map(operator.itemgetter(i), it) for i, it in enumerate(iters))
 
-    def __init__(self, arg): # pragma : no cover
-        self._d = dict(arg)
-
-    def __iter__(self):                  # pragma : no cover
-        return iter(self._d)
-
-    def __len__(self):                   # pragma : no cover
-        return len(self._d)
-
-    def __getitem__(self, key):          # pragma : no cover
-        return self._d[key]
-
-    def __repr__(self) :
-        return u'<frozendict %s>' % repr(self._d)
-
-    def __hash__(self):
-        try:
-            return self._cached_hash
-        except AttributeError:
-            h = self._cached_hash = hash(frozenset(self._d.items()))
-            return h
+def Enumerator(start=0, initial=()):
+    try : # py 2
+        return collections.defaultdict(itertools.count(start).next, initial)
+    except AttributeError : # py 3
+        return collections.defaultdict(itertools.count(start).__next__, initial)
 
 
-def cartesian(arrays, out=None): # pragma : no cover
-    """Generate a cartesian product of input arrays.
+class TempShelve(collections_abc.MutableMapping):
+    def __init__(self, filename):
+        self.path = tempfile.mkdtemp()
+        self.shelve = shelve.open(self.path + filename, 'n',
+                                  protocol=pickle.HIGHEST_PROTOCOL)
 
-    Parameters
-    ----------
-    arrays : list of array-like
-    1-D arrays to form the cartesian product of.
-    out : ndarray
-    Array to place the cartesian product in.
-    
-    Returns
-    -------
-    out : ndarray
-    2-D array of shape (M, len(arrays)) containing cartesian products
-    formed of input arrays.
-    
-    Examples
-    --------
-    >>> cartesian(([1, 2, 3], [4, 5], [6, 7]))
-    array([[1, 4, 6],
-    [1, 4, 7],
-    [1, 5, 6],
-    [1, 5, 7],
-    [2, 4, 6],
-    [2, 4, 7],
-    [2, 5, 6],
-    [2, 5, 7],
-    [3, 4, 6],
-    [3, 4, 7],
-    [3, 5, 6],
-    [3, 5, 7]])
-    
-    References
-    ----------
-    http://stackoverflow.com/q/1208118
-    
-    """
-    arrays = [numpy.asarray(x).ravel() for x in arrays]
-    dtype = arrays[0].dtype
+    def close(self):
+        self.shelve.close()
+        shutil.rmtree(self.path)
 
-    n = numpy.prod([x.size for x in arrays])
-    if out is None:
-        out = numpy.empty([n, len(arrays)], dtype=dtype)
+    def __getitem__(self, key):
+        key = shelve_key(key)
+        return self.shelve[key]
 
-    m = n / arrays[0].size
-    out[:, 0] = numpy.repeat(arrays[0], m)
-    if arrays[1:]:
-        cartesian(arrays[1:], out=out[0:m, 1:])
-        for j in range(1, arrays[0].size):
-            out[j * m:(j + 1) * m, 1:] = out[0:m, 1:]
-    return out
+    def __setitem__(self, key, value):
+        self.shelve[shelve_key(key)] = value
+
+    def __delitem__(self, key):
+        del self.shelve[shelve_key(key)]
+
+    def __iter__(self):
+        return iter(self.shelve)
+
+    def __len__(self):
+        return len(self.shelve)
+
+    def __contains__(self, key):
+        return shelve_key(key) in self.shelve
+
+    def values(self):
+        return viewvalues(self.shelve)
+
+
+def sniff_id_type(ids):
+    example = ids[0][0]
+    python_type = type(example)
+    if python_type is binary_type or python_type is text_type :
+        python_type = (unicode, 256)
+    else:
+        int_type(example) # make sure we can cast to int
+        python_type = int_type
+
+    return python_type

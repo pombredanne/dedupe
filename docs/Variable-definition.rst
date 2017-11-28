@@ -85,7 +85,7 @@ Example custom comparator:
 
 .. code:: python
 
-  python def sameOrNotComparator(field_1, field_2) :     
+  def sameOrNotComparator(field_1, field_2) :     
     if field_1 and field_2 :         
         if field_1 == field_2 :             
             return 0         
@@ -126,7 +126,7 @@ hashable sequences like tuples or frozensets.
 
     {'field' : 'Co-authors', 'type': 'Set',
      'corpus' : [('steve edwards'),
-		 ('steve edwards', steve jobs')]}
+		 ('steve edwards', 'steve jobs')]}
      } 
 
 or
@@ -151,11 +151,11 @@ are good when the effect of two predictors is not simply additive.
 
 .. code:: python
 
-    [{'field' : 'Name', 'variable name' : 'name', : 'type': 'String'},
-     {'field' : 'Zip', 'variable name' : 'zip',  :'type': 'Custom', 
+    [{'field': 'Name', 'variable name': 'name', 'type': 'String'},
+     {'field': 'Zip', 'variable name': 'zip', 'type': 'Custom', 
       'comparator' : sameOrNotComparator},
      {'type': 'Interaction', 
-      'interaction variables' : ['name', 'zip']}} 
+      'interaction variables': ['name', 'zip']}]
 
 Exact
 ^^^^^
@@ -176,7 +176,7 @@ you something about meaningful about the record.
 
 .. code:: python
 
-    {'field' : 'first_name', 'type': 'Exists'}} 
+    {'field' : 'first_name', 'type': 'Exists'} 
 
 
 
@@ -190,7 +190,7 @@ but law firms don't. Categorical variables would let you indicate
 whether two records are both taxi companies, both law firms, or one of
 each.
 
-Dedupe would represents these three possibilities using two dummy
+Dedupe would represent these three possibilities using two dummy
 variables:
 
 ::
@@ -216,7 +216,7 @@ You would create a definition like:
 .. code:: python
 
     {'field' : 'Business Type', 'type': 'Categorical',
-    'categories' : ['taxi', 'lawyer']}}
+    'categories' : ['taxi', 'lawyer']}
 
 Price
 ^^^^^
@@ -229,6 +229,36 @@ the value is 0 or negative, then an exception will be raised.
 
     {'field' : 'cost', 'type': 'Price'}
 
+DateTime
+^^^^^^^^
+
+DateTime variables are useful for comparing dates and timestamps. This variable
+can accept strings or Python datetime objects as inputs.
+
+The DateTime variable definition accepts a few optional arguments that can help 
+improve behavior if you know your field follows an unusual format:
+
+* :code:`fuzzy` - Use fuzzy parsing to automatically extract dates from strings like "It happened on June 2nd, 2017" (default :code:`True`)
+* :code:`dayfirst` - Ambiguous dates should be parsed as dd/mm/yy (default :code:`False`)
+* :code:`yearfirst`-  Ambiguous dates should be parsed as yy/mm/dd (default :code:`False`)
+
+Note that the DateTime variable defaults to mm/dd/yy for ambiguous dates.
+If both :code:`dayfirst` and :code:`yearfirst` are set to :code:`True`, then :code:`dayfirst` will take
+precedence.
+
+Sample DateTime variable definition, using the defaults:
+
+.. code:: python
+
+    {'field' : 'time_of_sale', 'type': 'DateTime',
+    'fuzzy': True, 'dayfirst': False, 'yearfirst': False}
+
+If you're happy with the defaults, you can simply define the :code:`field` and :code:`type`:
+
+.. code:: python
+
+    {'field' : 'time_of_sale', 'type': 'DateTime'}
+
 
 Optional Variables
 ------------------
@@ -237,7 +267,7 @@ Address Type
 ^^^^^^^^^^^^
 
 An 'Address' variable should be used for United States addresses. It
-uses the `usaddress <http://usaddress.readthedocs.org/en/latest/>`__
+uses the `usaddress <https://usaddress.readthedocs.io/en/latest/>`__
 package to split apart an address string into components like address
 number, street name, and street type and compares component to component.
 
@@ -251,11 +281,12 @@ Install the `dedupe-variable-address <https://pypi.python.org/pypi/dedupe-variab
 Name Type
 ^^^^^^^^^
 
-A 'Name' variable should be used for American names. It uses the
-`probablepeople <http://probablepeople.readthedocs.org/en/latest/>`__
-package to split apart an name string into components like give name,
-surname, and generaaddress number, street name, and generational
-suffix and compares component to component.
+A 'Name' variable should be used for a field that contains American
+names, corporations and households. It uses the `probablepeople
+<https://probablepeople.readthedocs.io/en/latest/>`__ package to split
+apart an name string into components like give name, surname,
+generational suffix, for people names, and abbreviation, company type,
+and legal form for corporations.
 
 .. code:: python
 
@@ -328,9 +359,9 @@ Longer example of a variable definition:
 
 .. code:: python
 
-    variables = [{'field' : 'name', 'type' : 'String'},
+    variables = [{'field' : 'name', 'variable name' : 'name', 'type' : 'String'},
                  {'field' : 'address', 'type' : 'String'},
-                 {'field' : 'city', 'type' : 'String'},
+                 {'field' : 'city', variable name' : 'city', 'type' : 'String'},
                  {'field' : 'zip', 'type' : 'Custom', 'comparator' : sameOrNotComparator},
                  {field' : 'cuisine', 'type' : 'String', 'has missing': True}
                  {'type' : 'Interaction', 'interaction variables' : ['name', 'city']}

@@ -28,51 +28,34 @@
 
    .. code:: python
 
-      labeled_example = {'match'    : [], 
+      labeled_examples = {'match'    : [], 
 			 'distinct' : [({'name' : 'Georgie Porgie'}, 
 					{'name' : 'Georgette Porgette'})]
 			 }
       deduper.markPairs(labeled_examples)
 
 
-.. py:method:: train([ppc=0.1, [uncovered_dupes=1, [index_predicates=True]]])
+.. py:method:: train([recall=0.95, [index_predicates=True]])
 
    Learn final pairwise classifier and blocking rules. Requires that
    adequate training data has been already been provided.
 
-   :param float ppc: Limits the Proportion of Pairs Covered that we
-		     allow a predicate to cover. If a predicate puts
-		     together a fraction of possible pairs greater
-		     than the ppc, that predicate will be removed from
-		     consideration.
 
-		     As the size of the data increases, the user will
-		     generally want to reduce ppc.
+   :param float recall: The proportion of true dupe pairs in our
+			training data that that we the learned blocks
+			must cover. If we lower the recall, there will
+			be pairs of true dupes that we will never
+			directly compare.
 
-		     ppc should be a value between 0.0 and
-		     1.0. Defaults to 0.1
-
-   :param int uncovered_dupes: The number of true dupes pairs in our
-			       training data that we can accept will
-			       not be put into any block. If true true
-			       duplicates are never in the same block,
-			       we will never compare them, and may
-			       never declare them to be duplicates.
-
-			       However, requiring that we cover every
-			       single true dupe pair may mean that we
-			       have to use blocks that put together
-			       many, many distinct pairs that we'll
-			       have to expensively, compare as well.
-
-			       Defaults to 1
+			recall should be a float between 0.0 and 1.0,
+			the default is 0.95
 
    :param bool index_predicates: Should dedupe consider predicates
 				 that rely upon indexing the
 				 data. Index predicates can be slower
 				 and take susbstantial memory.
 
-				 Defaults to True
+				 Defaults to True.
 
    .. code:: python
 
@@ -87,7 +70,7 @@
 
    .. code:: python
 
-      with open('./my_training.json', 'wb') as f:
+      with open('./my_training.json', 'w') as f:
           deduper.writeTraining(f)
 
 .. py:method:: readTraining(training_file)
@@ -98,20 +81,8 @@
 
    .. code:: python
 
-      with open('./my_training.json', 'rb') as f:
+      with open('./my_training.json') as f:
           deduper.readTraining(f)
-
-.. py:method:: writeSettings(file_obj)
-
-   Write a settings file that contains the data model and predicates
-   to a file object.
-
-   :param file file_obj: File object.
-
-   .. code:: python
-
-      with open('my_learned_settings', 'wb') as f:
-          deduper.writeSettings(f)
 
 .. py:method:: cleanupTraining()
 

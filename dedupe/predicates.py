@@ -5,15 +5,29 @@ from builtins import str
 import re
 import math
 import itertools
+import string
+import sys
 
-from metaphone import doublemetaphone
+from doublemetaphone import doublemetaphone
 from dedupe.cpredicates import ngrams, initials
 import dedupe.tfidf as tfidf
+import dedupe.levenshtein as levenshtein
 
 words = re.compile(r"[\w']+").findall
 integers = re.compile(r"\d+").findall
 start_word = re.compile(r"^([\w']+)").match
 start_integer = re.compile(r"^(\d+)").match
+
+if sys.version < '3':
+    PUNCTUATION = string.punctuation
+    def strip_punc(s) :
+        s = s.encode('utf-8').translate(None, PUNCTUATION)
+        return s.decode('utf-8')
+else :
+    PUNCTABLE = str.maketrans("", "", string.punctuation)
+    def strip_punc(s) :
+        return s.translate(PUNCTABLE)
+
 
 class Predicate(object) :
     def __iter__(self) :
@@ -23,10 +37,18 @@ class Predicate(object) :
         return "%s: %s" % (self.type, self.__name__)
 
     def __hash__(self):
-        return hash(repr(self))
+        try:
+            return self._cached_hash
+        except AttributeError:
+            h = self._cached_hash = hash(repr(self))
+            return h
 
     def __eq__(self, other) :
         return repr(self) == repr(other)
+
+    def __len__(self):
+        return 1
+
 
 class SimplePredicate(Predicate) :
     type = "SimplePredicate"
@@ -36,10 +58,18 @@ class SimplePredicate(Predicate) :
         self.__name__ = "(%s, %s)" % (func.__name__, field)
         self.field = field
 
-    def __call__(self, record) :
+    def __call__(self, record, **kwargs) :
         column = record[self.field]
         if column :
             return self.func(column)
+        else :
+            return ()
+
+class StringPredicate(SimplePredicate) :
+    def __call__(self, record, **kwargs) :
+        column = record[self.field]
+        if column :
+            return self.func(strip_punc(column))
         else :
             return ()
 
@@ -59,7 +89,7 @@ class ExistsPredicate(Predicate) :
             return ('0',)
 
 
-    def __call__(self, record) :
+    def __call__(self, record, **kwargs) :
         column = record[self.field]
         return self.func(column)
 
@@ -72,7 +102,6 @@ class IndexPredicate(Predicate) :
         self.index = None
 
     def __getstate__(self):
-
         result = self.__dict__.copy()
 
         return {'__name__': result['__name__'],
@@ -83,38 +112,16 @@ class IndexPredicate(Predicate) :
         self.__dict__ = d
         self.index = None
 
-class TfidfIndexPredicate(IndexPredicate) :
-    def initIndex(self, stop_words) :
-        return tfidf.TfIdfIndex(stop_words)
-    
-
-class TfidfSearchPredicate(TfidfIndexPredicate):
-    def __call__(self, record) :
-        column = record[self.field]
-        if column :
-            try :
-                centers = self.index.search(self.preprocess(column), 
-                                            self.threshold)
-            except AttributeError :
-                raise AttributeError("Attempting to block with an index "
-                                     "predicate without indexing records")
-
-            l_str = str
-            return [l_str(center) for center in centers]
-
-        else :
-            return ()
-
-class TfidfCanopyPredicate(TfidfIndexPredicate):
+class CanopyPredicate(object):
     def __init__(self, *args, **kwargs) :
-        super(TfidfCanopyPredicate, self).__init__(*args, **kwargs)
+        super(CanopyPredicate, self).__init__(*args, **kwargs)
         self.canopy = {}
 
     def __setstate__(self, *args, **kwargs) :
-        super(TfidfCanopyPredicate, self).__setstate__(*args, **kwargs)
+        super(CanopyPredicate, self).__setstate__(*args, **kwargs)
         self.canopy ={}
 
-    def __call__(self, record) :
+    def __call__(self, record, **kwargs) :
         block_key = None
         column = record[self.field]
 
@@ -139,12 +146,43 @@ class TfidfCanopyPredicate(TfidfIndexPredicate):
 
                 if canopy_members :
                     block_key = doc_id
+                    self.canopy[doc_id] = doc_id
+                else:
+                    self.canopy[doc_id] = None
+
 
         if block_key is None :
             return []
         else :
             return [str(block_key)]
 
+class SearchPredicate(object):
+    def __call__(self, record, target=False, **kwargs):
+        column = record[self.field]
+        if column:
+            doc = self.preprocess(column)
+            try:
+                if target:
+                    centers = [self.index._doc_to_id[doc]]
+                else:
+                    centers = self.index.search(doc, self.threshold)
+            except AttributeError:
+                raise AttributeError("Attempting to block with an index "
+                                     "predicate without indexing records")
+            l_str = str
+            return [l_str(center) for center in centers]
+        else :
+            return ()
+
+class TfidfPredicate(IndexPredicate) :
+    def initIndex(self) :
+        return tfidf.TfIdfIndex()
+    
+class TfidfCanopyPredicate(CanopyPredicate, TfidfPredicate):
+    pass
+
+class TfidfSearchPredicate(SearchPredicate, TfidfPredicate):
+    pass
 
 class TfidfTextPredicate(object) :
     rx = re.compile(r"(?u)\w+[\w*?]*")
@@ -158,7 +196,7 @@ class TfidfSetPredicate(object) :
 
 class TfidfNGramPredicate(object) :
     def preprocess(self, doc) :
-        return tuple(ngrams(doc.replace(' ', ''), 2))
+        return tuple(sorted(ngrams(doc.replace(' ', ''), 2)))
 
 class TfidfTextSearchPredicate(TfidfTextPredicate, 
                                TfidfSearchPredicate) :
@@ -184,28 +222,33 @@ class TfidfNGramCanopyPredicate(TfidfNGramPredicate,
                                 TfidfCanopyPredicate) :
     type = "TfidfNGramCanopyPredicate"
 
+class LevenshteinPredicate(IndexPredicate) :
+    def initIndex(self) :
+        return levenshtein.LevenshteinIndex()
 
+    def preprocess(self, doc):
+        return doc
+    
+class LevenshteinCanopyPredicate(CanopyPredicate, LevenshteinPredicate):
+    type = "LevenshteinCanopyPredicate"
 
-class CompoundPredicate(Predicate) :
+class LevenshteinSearchPredicate(SearchPredicate, LevenshteinPredicate):
+    type = "LevenshteinSearchPredicate"
+    
+
+class CompoundPredicate(tuple) :
     type = "CompoundPredicate"
 
-    def __init__(self, predicates) :
-        self.predicates = predicates
-        self.__name__ = u'(%s)' % u', '.join([str(pred)
-                                              for pred in 
-                                              predicates])
+    @property
+    def __name__(self) :
+        return u'(%s)' % u', '.join(str(pred) for pred in self)
 
-    def __iter__(self) :
-        for pred in self.predicates :
-            yield pred
-
-    def __call__(self, record) :
-        predicate_keys = [predicate(record)
-                          for predicate in self.predicates]
+    def __call__(self, record, **kwargs) :
+        predicate_keys = [predicate(record, **kwargs)
+                          for predicate in self]
         return [u':'.join(block_key)
                 for block_key
                 in itertools.product(*predicate_keys)]
- 
 
 def wholeFieldPredicate(field):
     """return the whole field"""
@@ -224,15 +267,16 @@ def firstTokenPredicate(field) :
 
 def commonIntegerPredicate(field):
     """return any integers"""
-    return set(integers(field))
+    return {str(int(i)) for i in integers(field)}
 
 def nearIntegersPredicate(field):
     """return any integers N, N+1, and N-1"""
     ints = integers(field)
-    near_ints = set(ints)
+    near_ints = set()
     for char in ints :
         num = int(char)
         near_ints.add(str(num-1))
+        near_ints.add(str(num))
         near_ints.add(str(num+1))
         
     return near_ints
@@ -304,7 +348,7 @@ def sortedAcronym(field) :
     return (''.join(sorted(each[0] for each in field.split())),)
 
 def doubleMetaphone(field) :
-    return [metaphone for metaphone in doublemetaphone(field) if metaphone]
+    return {metaphone for metaphone in doublemetaphone(field) if metaphone}
 
 def metaphoneToken(field) :
     return {metaphone_token for metaphone_token 

@@ -36,9 +36,9 @@ def canonicalImport(filename):
     with open(filename) as f:
         reader = csv.DictReader(f)
         for i, row in enumerate(reader):
-            clean_row = [(k, preProcess(v)) for (k, v) in
-                         viewitems(row)]
-            data_d[filename + str(i)] = dedupe.core.frozendict(clean_row) 
+            clean_row = {k : preProcess(v) for (k, v) in
+                         viewitems(row)}
+            data_d[filename + str(i)] = clean_row
 
 
     return data_d, reader.fieldnames
@@ -65,16 +65,26 @@ data_1, header = canonicalImport('tests/datasets/restaurant-1.csv')
 data_2, _ = canonicalImport('tests/datasets/restaurant-2.csv')
 
 training_pairs = dedupe.trainingDataLink(data_1, data_2, 'unique_id', 5000)
-                                         
-duplicates_s = set(frozenset(pair) for pair in training_pairs['match'])
+
+all_data = data_1.copy()
+all_data.update(data_2)
+
+duplicates_s = set()
+for _, pair in itertools.groupby(sorted(all_data.items(),
+                                        key=lambda x: x[1]['unique_id']),
+                                 key=lambda x: x[1]['unique_id']):
+    pair = list(pair)
+    if len(pair) == 2:
+        a, b = pair
+        duplicates_s.add(frozenset((a[0], b[0])))
 
 t0 = time.time()
 
 print('number of known duplicate pairs', len(duplicates_s))
 
 if os.path.exists(settings_file):
-    with open(settings_file) as f :
-        deduper = dedupe.StaticRecordLink(f)
+    with open(settings_file, 'rb') as f :
+        gazetteer = dedupe.StaticGazetteer(f)
 else:
     fields = [{'field': 'name', 'type': 'String'},
               {'field': 'address', 'type': 'String'},
@@ -82,24 +92,28 @@ else:
               {'field': 'city','type' : 'String'}
               ]
 
-    deduper = dedupe.RecordLink(fields)
-    deduper.sample(data_1, data_2, 10000) 
-    deduper.markPairs(training_pairs)
-    deduper.train()
-    with open(settings_file, 'wb') as f:
-        deduper.writeSettings(f)
+    gazetteer = dedupe.Gazetteer(fields)
+    gazetteer.sample(data_1, data_2, 10000) 
+    gazetteer.markPairs(training_pairs)
+    gazetteer.train()
+    
+if not gazetteer.blocked_records:
+    gazetteer.index(data_2)
 
-
-alpha = deduper.threshold(data_1, data_2)
+with open(settings_file, 'wb') as f:
+    gazetteer.writeSettings(f, index=True)
+        
+alpha = gazetteer.threshold(data_1)
 
 
 # print candidates
 print('clustering...')
-clustered_dupes = deduper.match(data_1, data_2, threshold=alpha)
+clustered_dupes = gazetteer.match(data_1, threshold=alpha, n_matches=1, generator=True)
 
 print('Evaluate Clustering')
-confirm_dupes = set(frozenset((data_1[pair[0]], data_2[pair[1]])) 
-                    for pair, score in clustered_dupes)
+confirm_dupes = set(frozenset(pair)
+                    for matches in clustered_dupes
+                    for pair, score in matches)
 
 evaluateDuplicates(confirm_dupes, duplicates_s)
 

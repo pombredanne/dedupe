@@ -22,12 +22,11 @@ class SerializerTest(unittest.TestCase) :
             from io import StringIO
             encoded_file = StringIO()
 
-        training_pairs = {u"distinct":[(
-            dedupe.core.frozendict({u'bar' : frozenset([u'barë']),
-                                    'baz' : (1,2),
-                                    'bang' : [1,2],
-                                    u'foo' : u'baz'}),
-            dedupe.core.frozendict({u'foo' : u'baz'}))], 
+        training_pairs = {u"distinct":[({u'bar' : frozenset([u'barë']),
+                                         'baz' : (1,2),
+                                         'bang' : [1,2],
+                                         u'foo' : u'baz'},
+                                        {u'foo' : u'baz'})], 
                           u"match" : []}
 
         json.dump(training_pairs, 
@@ -51,6 +50,7 @@ class SerializerTest(unittest.TestCase) :
                           tuple)
 
         deduper = dedupe.Dedupe([{'field' : 'foo', 'type' : 'String'}])
+        deduper.classifier.cv = False
 
         encoded_file.seek(0)
 

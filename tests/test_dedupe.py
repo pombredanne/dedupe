@@ -20,16 +20,16 @@ DATA = {  100 : {"name": "Bob", "age": "50"},
           145 : {"name": "Kyle", "age": "27"}
         }
 
-DATA_SAMPLE = ((dedupe.core.frozendict({'age': '27', 'name': 'Kyle'}), 
-                dedupe.core.frozendict({'age': '50', 'name': 'Bob'})),
-               (dedupe.core.frozendict({'age': '27', 'name': 'Kyle'}), 
-                dedupe.core.frozendict({'age': '35', 'name': 'William'})),
-               (dedupe.core.frozendict({'age': '10', 'name': 'Sue'}), 
-                dedupe.core.frozendict({'age': '35', 'name': 'William'})),
-               (dedupe.core.frozendict({'age': '27', 'name': 'Kyle'}), 
-                dedupe.core.frozendict({'age': '20', 'name': 'Jimmy'})),
-               (dedupe.core.frozendict({'age': '75', 'name': 'Charlie'}), 
-                dedupe.core.frozendict({'age': '21', 'name': 'Jimbo'})))
+DATA_SAMPLE = (({'age': '27', 'name': 'Kyle'}, 
+                {'age': '50', 'name': 'Bob'}),
+               ({'age': '27', 'name': 'Kyle'}, 
+                {'age': '35', 'name': 'William'}),
+               ({'age': '10', 'name': 'Sue'}, 
+                {'age': '35', 'name': 'William'}),
+               ({'age': '27', 'name': 'Kyle'}, 
+                {'age': '20', 'name': 'Jimmy'}),
+               ({'age': '75', 'name': 'Charlie'}, 
+                {'age': '21', 'name': 'Jimbo'}))
 
 
 
@@ -41,7 +41,6 @@ class DataModelTest(unittest.TestCase) :
     DataModel = dedupe.datamodel.DataModel
     
     self.assertRaises(TypeError, DataModel)
-    assert DataModel({}) == {'fields': [], 'bias': 0}
 
     data_model = DataModel([{'field' : 'a', 
                             'variable name' : 'a', 
@@ -52,7 +51,7 @@ class DataModelTest(unittest.TestCase) :
                             {'type' : 'Interaction', 
                              'interaction variables' : ['a', 'b']}])
 
-    assert data_model['fields'][2].interaction_fields  == ['a', 'b']
+    assert data_model._interaction_indices == [[0, 1]]
 
     data_model = DataModel([{'field' : 'a', 
                              'variable name' : 'a', 
@@ -64,8 +63,7 @@ class DataModelTest(unittest.TestCase) :
                             {'type' : 'Interaction', 
                              'interaction variables' : ['a', 'b']}])
 
-    #print data_model['fields']
-    assert data_model['fields'][2].has_missing == True
+    assert data_model._missing_field_indices == [0, 2]
 
     data_model = DataModel([{'field' : 'a', 
                              'variable name' : 'a', 
@@ -77,8 +75,7 @@ class DataModelTest(unittest.TestCase) :
                             {'type' : 'Interaction', 
                              'interaction variables' : ['a', 'b']}])
 
-
-    assert data_model['fields'][2].has_missing == False
+    assert data_model._missing_field_indices == []
 
 
 class ConnectedComponentsTest(unittest.TestCase) :
@@ -95,25 +92,12 @@ class ConnectedComponentsTest(unittest.TestCase) :
                      ((11, 12), .2)],
                     dtype = [('pairs', 'i4', 2), ('score', 'f4', 1)])
     components = dedupe.clustering.connected_components
-    numpy.testing.assert_equal(list(components(G, 30000)), \
-                               [numpy.array([([1, 2], 0.10000000149011612), 
-                                             ([2, 3], 0.20000000298023224)], 
-                                            dtype=[('pairs', 'i4', (2,)), 
-                                                   ('score', '<f4')]), 
-                                numpy.array([([4, 5], 0.20000000298023224), 
-                                             ([4, 6], 0.20000000298023224)], 
-                                            dtype=[('pairs', 'i4', (2,)), 
-                                                   ('score', '<f4')]), 
-                                numpy.array([([12, 13], 0.20000000298023224), 
-                                             ([12, 14], 0.5),
-                                             ([10, 11], 0.20000000298023224), 
-                                             ([11, 12], 0.20000000298023224)],
-                                            dtype=[('pairs', 'i4', (2,)), 
-                                                   ('score', '<f4')]), 
-                                numpy.array([([7, 9], 0.20000000298023224), 
-                                             ([8, 9], 0.20000000298023224)], 
-                                            dtype=[('pairs', 'i4', (2,)), 
-                                                   ('score', '<f4')])])
+    G_components = {frozenset(tuple(edge) for edge, _ in component)
+                    for component in components(G, 30000)}
+    assert G_components == {frozenset(((1, 2), (2,3))),
+                            frozenset(((4, 5), (4, 6))),
+                            frozenset(((12, 13), (12, 14), (10, 11), (11, 12))),
+                            frozenset(((7, 9), (8, 9)))}
 
   
 
@@ -215,52 +199,45 @@ class ClusteringTest(unittest.TestCase):
 
   def test_greedy_matching(self):
     greedyMatch = dedupe.clustering.greedyMatching
-    assert greedyMatch(self.bipartite_dupes, 
-                       threshold=0.5) == [((4, 6), 0.96), 
-                                          ((2, 7), 0.72), 
-                                          ((3, 8), 0.65)]
-    assert greedyMatch(self.bipartite_dupes, 
-                       threshold=0) == [((4, 6), 0.96), 
-                                        ((2, 7), 0.72), 
-                                        ((3, 8), 0.65), 
-                                        ((1, 5), 0.1)]
-    assert greedyMatch(self.bipartite_dupes, 
-                       threshold=0.8) == [((4, 6), 0.96)]
-    assert greedyMatch(self.bipartite_dupes, 
-                       threshold=1) == []
+
+    bipartite_dupes = numpy.array(list(self.bipartite_dupes),
+                                  dtype=[('ids', int, 2),
+                                         ('score', float, 1)])
+                                  
+    assert list(greedyMatch(bipartite_dupes, 
+                            threshold=0.5)) == [((4, 6), 0.96), 
+                                                ((2, 7), 0.72), 
+                                                ((3, 8), 0.65)]
+    assert list(greedyMatch(bipartite_dupes, 
+                            threshold=0)) == [((4, 6), 0.96), 
+                                              ((2, 7), 0.72), 
+                                              ((3, 8), 0.65), 
+                                              ((1, 5), 0.1)]
+    assert list(greedyMatch(bipartite_dupes, 
+                            threshold=0.8)) == [((4, 6), 0.96)]
+    assert list(greedyMatch(bipartite_dupes, 
+                            threshold=1)) == []
 
   def test_gazette_matching(self):
+    
     gazetteMatch = dedupe.clustering.gazetteMatching
+    blocked_dupes = itertools.groupby(self.bipartite_dupes,
+                                      key = lambda x : x[0][0])
 
-    assert set(gazetteMatch(self.bipartite_dupes, 
-                            threshold=0.5)) == set([(((4, 6), 0.96),), 
-                                                    (((1, 6), 0.72),), 
-                                                    (((2, 7), 0.72),), 
-                                                    (((3, 6), 0.72),)])
+    to_numpy = lambda x: numpy.array(x, dtype=[('ids', int, 2),
+                                               ('score', float, 1)])
 
-    assert set(gazetteMatch(self.bipartite_dupes, 
-                            threshold=0, n_matches=2)) == set([(((1, 6), 0.72), 
-                                                                ((1, 8), 0.6)), 
-                                                               (((2, 7), 0.72),
-                                                                ((2, 8), 0.3)), 
-                                                               (((3, 6), 0.72), 
-                                                                ((3, 8), 0.65)), 
-                                                               (((4, 6), 0.96), 
-                                                                ((4, 5), 0.63)),
-                                                               (((5, 8), 0.24),)])
+    blocked_dupes = [to_numpy(list(block)) for _, block in blocked_dupes]
 
-    assert set(gazetteMatch(self.bipartite_dupes, 
-                        threshold=0)) == set([(((4, 6), 0.96),), 
-                                              (((1, 6), 0.72),), 
-                                              (((2, 7), 0.72),), 
-                                              (((3, 6), 0.72),), 
-                                              (((5, 8), 0.24),)])
+    target = [(((1, 6), 0.72), ((1, 8), 0.6)), 
+              (((2, 7), 0.72), ((2, 8), 0.3)), 
+              (((3, 6), 0.72), ((3, 8), 0.65)), 
+              (((4, 6), 0.96), ((4, 5), 0.63)),
+              (((5, 8), 0.24),)]
 
-    assert gazetteMatch(self.bipartite_dupes, 
-                        threshold=0.8) == [(((4,6), 0.96),)]
+    assert [tuple((tuple(pair), score) for pair, score in each.tolist())
+            for each in gazetteMatch(blocked_dupes, n_matches=2)] == target
 
-    assert gazetteMatch(self.bipartite_dupes, 
-                        threshold=1) == []
 
 
 class PredicatesTest(unittest.TestCase):
@@ -283,14 +260,14 @@ class PredicatesTest(unittest.TestCase):
     assert dedupe.predicates.firstIntegerPredicate('1foo') == ('1',)
     assert dedupe.predicates.firstIntegerPredicate('f1oo') == ()
     assert dedupe.predicates.sameThreeCharStartPredicate(field) == ('123',)
-    assert dedupe.predicates.sameThreeCharStartPredicate('12') == ()
+    assert dedupe.predicates.sameThreeCharStartPredicate('12') == ('12', )
     assert dedupe.predicates.commonFourGram('12') == set([])
     assert dedupe.predicates.sameFiveCharStartPredicate(field) == ('12316',)
     assert dedupe.predicates.sameSevenCharStartPredicate(field) == ('12316th',)
     assert dedupe.predicates.nearIntegersPredicate(field) == set(['15', '17', '16', '122', '123', '124'])
     assert dedupe.predicates.commonFourGram(field) == set(['1231', '2316', '316t', '16th', '6ths', 'thst'])
     assert dedupe.predicates.commonSixGram(field) == set(['12316t', '2316th', '316ths', '16thst'])
-    assert dedupe.predicates.initials(field,12) == ()
+    assert dedupe.predicates.initials(field,12) == ('123 16th st',)
     assert dedupe.predicates.initials(field,7) == ('123 16t',)
     assert dedupe.predicates.ngrams(field,3) == ['123','23 ','3 1',' 16','16t','6th','th ','h s', ' st']
     assert dedupe.predicates.commonTwoElementsPredicate((1,2,3)) == set(('1 2','2 3'))

@@ -1,3 +1,72 @@
+# 1.8.0
+- matchBlocks is not a generator; match is now optionally a generator. If the
+  generator option is turned of for the Gazette match is lazy
+
+# 1.7.8
+- Speed up blocking, on our way to 3-predicates
+
+# 1.7.5
+- Significantly reduced memory footprint during connected_components
+
+# 1.7.3
+- Significantly reduced memory footprint during scoreDuplicates
+
+# 1.7.2
+- Improper release
+
+# 1.7.1
+- TempShelve class that addresses various bugs related to cleaning up tempoary shelves
+
+# 1.7.0
+- Added `target` argument to blocker and predicates for changing the behavior
+  of the predicates for the target and source dataset if we are linking.
+
+# 1.6.8
+- Use file-backed blocking with dbm, dramatically increases size of data that can be handled without special programming
+
+# 1.6.7
+- Reduce memory footprint of matching
+
+# 1.6.0
+- Simplify .train method
+
+# 1.5.5
+- Levenshtein search based index predicates thanks to @mattandahalfew
+
+# 1.5.0
+- simplified the sample API, this might be a breaking change for some
+- the active learner interface is now more modular to allow for a different learner
+- random sampling of pairs has been improved for linking case and
+  dedupe case, h/t to @MarkusShepherd
+
+## 1.4.15
+- frozendicts have finally been removed
+- first N char predicates return their entire length if length is less
+  than N, instead of nothing
+- crossvalidation is skipped in active learning if using default rlr learner
+
+## 1.4.5
+- Block indexes can now be persisted by using the index=True argument
+  in the writeSettings method
+
+## 1.4.1
+- Now uses C version of double metaphone for speed
+- Much faster compounding of blocks in block learning
+
+## 1.4.0
+- Block learning now tries to minimize the total number of comparisons
+  not just the comparisons of distinct records. This decouples makes
+  block learning from learning classifier learning. This change has
+  requires new, different arguments to the train method.
+
+## 1.3.8
+- Console labeler now shows fields in the order they are defined in
+  the data model. The labeler also reports number of labeled examples
+- `pud` argument added to the `train` method. Proportion of uncovered
+  dupes. This deprecates `uncovered_dupes` argument
+
+## 1.3.0
+- If we have enough training data, consider Compound predicates of length 3 in addition to predicates of length 2
 
 ## 1.1.1
 - None now treated as missing data indicator. Warnings for deprecations of older types of missing data indicators
@@ -10,7 +79,7 @@ Features
 Features
 - Speed up learning
 - Parallelize sampling
-- Optional [CRF Edit Distance](http://dedupe.readthedocs.org/en/latest/Variable-definition.html#optional-edit-distance)
+- Optional [CRF Edit Distance](https://dedupe.readthedocs.io/en/latest/Variable-definition.html#optional-edit-distance)
 
 ## 0.8.0
 Support for Python 3.4 added. Support for Python 2.6 dropped.

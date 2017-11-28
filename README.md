@@ -1,7 +1,7 @@
 # Dedupe Python Library
-[![Linux build](https://img.shields.io/travis/datamade/dedupe.svg?style=flat-square&label=Linux build)](https://travis-ci.org/datamade/dedupe)[![Windows build](https://img.shields.io/appveyor/ci/fgregg/dedupe.svg?style=flat-square&label=Windows build)](https://ci.appveyor.com/project/fgregg/dedupe)[![Coverage](https://img.shields.io/coveralls/datamade/dedupe.svg?style=flat-square)](https://coveralls.io/r/datamade/dedupe?branch=master)
+[![Linux build](https://img.shields.io/travis/dedupeio/dedupe.svg?style=flat-square&label=Linux%20build)](https://travis-ci.org/dedupeio/dedupe)[![Mac OS X build](https://img.shields.io/travis/dedupeio/dedupe.svg?style=flat-square&label=Mac%20OS%20X%20build)](https://travis-ci.org/dedupeio/dedupe)[![Windows build](https://img.shields.io/appveyor/ci/fgregg/dedupe-n4qju/master.svg?style=flat-square&label=Windows%20build)](https://ci.appveyor.com/project/fgregg/dedupe-n4qju)[![Coverage](https://img.shields.io/coveralls/dedupeio/dedupe.svg?style=flat-square)](https://coveralls.io/r/dedupeio/dedupe?branch=master)
 
-_dedupe is a python library that uses machine learning to perform de-duplication and entity resolution quickly on structured data._
+_dedupe is a python library that uses machine learning to perform fuzzy matching, deduplication and entity resolution quickly on structured data._
 
 __dedupe__ will help you: 
 
@@ -12,23 +12,23 @@ __dedupe__ will help you:
 dedupe takes in human training data and comes up with the best rules for your dataset to quickly and automatically find similar records, even with very large databases.
 
 ## Important links
-* Documentation: http://dedupe.rtfd.org/
-* Repository: https://github.com/datamade/dedupe
-* Issues: https://github.com/datamade/dedupe/issues
-* Examples: https://github.com/datamade/dedupe-examples
-* IRC channel, [#dedupe on irc.freenode.net](http://webchat.freenode.net/?channels=dedupe)
+* Documentation: https://dedupe.io/developers/library
+* Repository: https://github.com/dedupeio/dedupe
+* Issues: https://github.com/dedupeio/dedupe/issues
+* Mailing list: https://groups.google.com/forum/#!forum/open-source-deduplication
+* Examples: https://github.com/dedupeio/dedupe-examples
 
 ## Tools built with dedupe
 
-### [csvdedupe](https://github.com/datamade/csvdedupe)
-Command line tool for de-duplicating and [linking](https://github.com/datamade/csvdedupe#csvlink-usage) CSV files. Read about it on [Source Knight-Mozilla OpenNews](https://source.opennews.org/en-US/articles/introducing-cvsdedupe/).
+### [Dedupe.io](https://dedupe.io/)
+A full service web service powered by dedupe for de-duplicating and find matches in your messy data. It provides an easy-to-use interface and provides cluster review and automation, as well as advanced record linkage, continuous matching and API integrations. [See the product page](https://dedupe.io/) and the [launch blog post](https://datamade.us/blog/introducing-dedupeio).
 
-###[Spreadsheet Deduper](http://dedupe.datamade.us/)
-Web interface for de-duplicating spreadsheets with up to 10,000 rows. Read about it on the [DataMade blog](http://datamade.us/blog/introducing-spreadsheet-deduper/).
+### [csvdedupe](https://github.com/dedupeio/csvdedupe)
+Command line tool for de-duplicating and [linking](https://github.com/dedupeio/csvdedupe#csvlink-usage) CSV files. Read about it on [Source Knight-Mozilla OpenNews](https://source.opennews.org/en-US/articles/introducing-cvsdedupe/).
 
 ## Installation
 
-### Users
+### Using dedupe
 
 If you only want to use dedupe, install it this way:
 
@@ -37,64 +37,59 @@ pip install "numpy>=1.9"
 pip install dedupe
 ```
 
-### Windows Install Notes
-We recommending [installing some of dedupe's dependencies from a wheel](https://pip.pypa.io/en/latest/user_guide.html#installing-from-wheels), particularly [numpy](http://www.lfd.uci.edu/~gohlke/pythonlibs/#numpy) and [fastcluster](http://www.lfd.uci.edu/~gohlke/pythonlibs/#fastcluster). 
+Familiarize yourself with [dedupe's API](https://dedupe.io/developers/library/en/latest/API-documentation.html), and get started on your project. Need inspiration? Have a look at [some examples](https://github.com/dedupeio/dedupe-examples).
 
-#### OS X Install Notes
+### Developing dedupe
 
-Before installing, you may need to set the following environmental
-variables from the command line 
+We recommend using [virtualenv](http://virtualenv.readthedocs.org/en/latest/virtualenv.html) and [virtualenvwrapper](http://virtualenvwrapper.readthedocs.org/en/latest/install.html) for working in a virtualized development environment. [Read how to set up virtualenv](http://docs.python-guide.org/en/latest/dev/virtualenvs/).
 
-```bash 
-export CFLAGS=-Qunused-arguments 
-export CPPFLAGS=-Qunused-arguments
-```
-
-With default configurations, dedupe cannot do parallel processing on Mac OS X.
-For more information and for instructions on how to enable this, [refer to the
-wiki](http://dedupe.readthedocs.org/en/latest/OSX-Install-Notes.html).
-
-### Developers
-
-Dedupe requires [numpy](http://numpy.scipy.org/), which can be complicated to install. 
-If you are installing numpy for the first time, 
-[follow these instructions](http://docs.scipy.org/doc/numpy/user/install.html). You'll need to version 1.9 of numpy or higher.
+Once you have virtualenvwrapper set up,
 
 ```bash
-git clone git://github.com/datamade/dedupe.git
+mkvirtualenv dedupe
+git clone git://github.com/dedupeio/dedupe.git
 cd dedupe
 pip install "numpy>=1.9"
 pip install -r requirements.txt
 cython src/*.pyx
-python setup.py develop
+pip install -e .
+```
 
-#If these tests pass, then everything should have been installed correctly!
-coverage run -m nose -I canonical_test
+If these tests pass, then everything should have been installed correctly!
+
+```bash
+pytest
+```
+
+Afterwards, whenever you want to work on dedupe,
+
+```bash
+workon dedupe
 ```
 
 ## Testing
 Unit tests of core dedupe functions
 ```bash
-coverage run -m nose -I canonical_test
+pytest
 ```
 
 #### Test using canonical dataset from Bilenko's research
   
 Using Deduplication
 ```bash
-python tests/canonical_test.py
+python tests/canonical.py
 ```
 
 Using Record Linkage
 ```bash
-python tests/canonical_test_matching.py
+python tests/canonical_matching.py
 ```
 
 
 ## Team
 
-* [Forest Gregg](mailto:fgregg@gmail.com)
-* [Derek Eder](mailto:derek.eder@gmail.com)
+* Forest Gregg, DataMade
+* Derek Eder, DataMade
 
 ## Credits
 
@@ -103,7 +98,7 @@ Dedupe is based on Mikhail Yuryevich Bilenko's Ph.D. dissertation: [*Learnable S
 ## Errors / Bugs
 
 If something is not behaving intuitively, it is a bug, and should be reported.
-[Report it here](https://github.com/datamade/dedupe/issues)
+[Report it here](https://github.com/dedupeio/dedupe/issues)
 
 
 ## Note on Patches/Pull Requests
@@ -114,11 +109,11 @@ If something is not behaving intuitively, it is a bug, and should be reported.
 
 ## Copyright
 
-Copyright (c) 2014 Forest Gregg and Derek Eder. Released under the [MIT License](https://github.com/datamade/dedupe/blob/master/LICENSE).
+Copyright (c) 2017 Forest Gregg and Derek Eder. Released under the [MIT License](https://github.com/dedupeio/dedupe/blob/master/LICENSE).
 
 Third-party copyright in this distribution is noted where applicable.
 
 ## Citing Dedupe
 If you use Dedupe in an academic work, please give this citation:
 
-Gregg, Forest, and Derek Eder. 2014. Dedupe. https://github.com/datamade/dedupe.
+Gregg, Forest, and Derek Eder. 2017. Dedupe. https://github.com/dedupeio/dedupe.

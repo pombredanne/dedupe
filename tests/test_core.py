@@ -3,70 +3,56 @@ import dedupe
 import numpy
 import random
 import warnings
+import sys
 
 
 class RandomPairsTest(unittest.TestCase) :
     def test_random_pair(self) :
-        self.assertRaises(ValueError, dedupe.core.randomPairs, 1, 10)
-        assert dedupe.core.randomPairs(10, 10)
         random.seed(123)
-        numpy.random.seed(123)
-        random_pairs = dedupe.core.randomPairs(10, 5)
-        assert random_pairs == [( 0,  3),
-                                ( 3,  8),
-                                ( 4,  9),
-                                ( 5,  9),
-                                ( 2,  3)]
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            dedupe.core.randomPairs(10, 10**6)
-            assert len(w) == 1
-            assert str(w[-1].message) == "Requested sample of size 1000000, only returning 45 possible pairs"
-
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            sample = dedupe.core.randomPairs(10**40, 10)
-            assert len(w) == 2
-            assert str(w[0].message) == "There may be duplicates in the sample"
-            assert "Asked to sample pairs from" in str(w[1].message)
-            set(sample)
+        
+        if sys.version_info < (3,0):
+            target = [(0, 3), (0, 4), (2, 4), (0, 5), (6, 8)]
+        else:
+            target = [(0, 4), (2, 3), (0, 6), (3, 6), (0, 7)]
+        
+    
+        random_pairs = list(dedupe.core.randomPairs(10, 5))
+        assert random_pairs == target
 
         random.seed(123)
-        numpy.random.seed(123)
-        assert numpy.array_equal(dedupe.core.randomPairs(10**3, 1),
-                                 numpy.array([(292, 413)]))
+        if sys.version_info < (3,0):
+            target = [(265, 3429)]
+        else:
+            target = [(357, 8322)]
+
+        random_pairs = list(dedupe.core.randomPairs(10**4, 1))
+        assert random_pairs == target
+
+        random_pairs = list(dedupe.core.randomPairs(10**10, 1))
 
 
 
     def test_random_pair_match(self) :
-        self.assertRaises(ValueError, dedupe.core.randomPairsMatch, 1, 0, 10)
-        self.assertRaises(ValueError, dedupe.core.randomPairsMatch, 0, 0, 10)
-        self.assertRaises(ValueError, dedupe.core.randomPairsMatch, 0, 1, 10)
 
-        assert len(dedupe.core.randomPairsMatch(100, 100, 100)) == 100
-        assert len(dedupe.core.randomPairsMatch(10, 10, 99)) == 99
-
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            pairs = dedupe.core.randomPairsMatch(10, 10, 200)
-            assert str(w[0].message) == "Requested sample of size 200, only returning 100 possible pairs"
-
-        assert len(pairs) == 100
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            pairs = dedupe.core.randomPairsMatch(10, 10, 200)
-            assert str(w[0].message) == "Requested sample of size 200, only returning 100 possible pairs"
-
+        assert len(list(dedupe.core.randomPairsMatch(100, 100, 100))) == 100
+        assert len(list(dedupe.core.randomPairsMatch(10, 10, 99))) == 99
 
         random.seed(123)
-        numpy.random.seed(123)
-        pairs = dedupe.core.randomPairsMatch(10, 10, 10)
-        assert pairs == set([(7, 3), (3, 3), (2, 9), (6, 0), (2, 0), 
-                             (1, 9), (9, 4), (0, 4), (1, 0), (1, 1)])
+        random.seed(123)
+        if sys.version_info < (3,0):
+            target = [(0, 5), (0, 8), (4, 0), (1, 0), (9, 0),
+                      (0, 3), (5, 3), (3, 3), (8, 5), (1, 5)]
+        else:
+            target = [(0, 6), (3, 4), (1, 1), (9, 8), (5, 2),
+                      (1, 3), (0, 4), (4, 8), (6, 8), (7, 1)]
+
+        
+        pairs = list(dedupe.core.randomPairsMatch(10, 10, 10))
+        assert pairs == target
+
+        pairs = list(dedupe.core.randomPairsMatch(10, 10, 0))
+        assert pairs == []
+
 
 
 class ScoreDuplicates(unittest.TestCase):
@@ -88,9 +74,11 @@ class ScoreDuplicates(unittest.TestCase):
                           ('9', {'name': 'Mona', 'age': '9'}, empty_set)),
                         ])
 
-    self.data_model = dedupe.Dedupe([{'field' : "name", 'type' : 'String'}], ()).data_model
-    self.data_model['fields'][0].weight = -1.0302742719650269
-    self.data_model['bias'] = 4.76
+    deduper = dedupe.Dedupe([{'field' : "name", 'type' : 'String'}])
+    self.data_model = deduper.data_model
+    self.classifier = deduper.classifier 
+    self.classifier.weights = [-1.0302742719650269]
+    self.classifier.bias = 4.76
 
     score_dtype = [('pairs', '<U192', 2), ('score', 'f4', 1)]
 
@@ -106,6 +94,7 @@ class ScoreDuplicates(unittest.TestCase):
   def test_score_duplicates(self):
     scores = dedupe.core.scoreDuplicates(self.records,
                                          self.data_model,
+                                         self.classifier,
                                          2)
 
     numpy.testing.assert_equal(scores['pairs'], 
@@ -119,7 +108,6 @@ class ScoreDuplicates(unittest.TestCase):
 class FieldDistances(unittest.TestCase):
 
   def test_exact_comparator(self) :
-    fieldDistances = dedupe.core.fieldDistances      
     deduper = dedupe.Dedupe([{'field' : 'name',
                                'type' : 'Exact'}
                          ])
@@ -127,35 +115,28 @@ class FieldDistances(unittest.TestCase):
     record_pairs = (({'name' : 'Shmoo'}, {'name' : 'Shmee'}),
                     ({'name' : 'Shmoo'}, {'name' : 'Shmoo'}))
 
-    numpy.testing.assert_array_almost_equal(fieldDistances(record_pairs, 
-                                                           deduper.data_model),
+    numpy.testing.assert_array_almost_equal(deduper.data_model.distances(record_pairs),
                                             numpy.array([[0.0],
                                                          [1.0]]),
                                             3)
 
   def test_comparator(self) :
-    fieldDistances = dedupe.core.fieldDistances      
-
     deduper = dedupe.Dedupe([{'field' : 'type', 
                               'type' : 'Categorical',
 
-                              'categories' : ['a', 'b', 'c']}]
-                             , [])
+                              'categories' : ['a', 'b', 'c']}])
 
     record_pairs = (({'type' : 'a'},
                      {'type' : 'b'}),
                     ({'type' : 'a'},
                      {'type' : 'c'}))
 
-    numpy.testing.assert_array_almost_equal(fieldDistances(record_pairs, 
-                                                           deduper.data_model),
+    numpy.testing.assert_array_almost_equal(deduper.data_model.distances(record_pairs),
                                             numpy.array([[ 0, 0, 1, 0, 0],
                                                          [ 0, 0, 0, 1, 0]]),
                                             3)
 
   def test_comparator_interaction(self) :
-    fieldDistances = dedupe.core.fieldDistances      
-
     deduper = dedupe.Dedupe([{'field' : 'type', 
                               'variable name' : 'type',
                               'type' : 'Categorical',
@@ -164,35 +145,17 @@ class FieldDistances(unittest.TestCase):
                               'interaction variables' : ['type', 'name']},
                              {'field' : 'name',
                               'variable name' : 'name',
-                              'type' : 'Exact'}]
-                             , [])
+                              'type' : 'Exact'}])
 
     record_pairs = (({'name' : 'steven', 'type' : 'a'},
                      {'name' : 'steven', 'type' : 'b'}),
                     ({'name' : 'steven', 'type' : 'b'},
                      {'name' : 'steven', 'type' : 'b'}))
 
-    numpy.testing.assert_array_almost_equal(fieldDistances(record_pairs, 
-                                                           deduper.data_model),
+    numpy.testing.assert_array_almost_equal(deduper.data_model.distances(record_pairs),
                                             numpy.array([[0, 1, 1, 0, 1],
                                                          [1, 0, 1, 1, 0]]), 3)
  
-
-class FrozenDictTest(unittest.TestCase):
-
-    def test_hash_is_order_insensitive(self):
-        frozendict = dedupe.core.frozendict
-
-        test_dict = {'smtp': 21, 'dict': 2628}
-        reverse_test_dict = {'dict': 2628, 'smtp': 21}
-        assert test_dict == reverse_test_dict
-
-        test_frozendict = frozendict(test_dict)
-        reverse_test_frozendict = frozendict(reverse_test_dict)
-        assert frozendict(test_dict) == frozendict(reverse_test_dict)
-
-        assert hash(test_frozendict) == hash(reverse_test_frozendict)
-
 
 if __name__ == "__main__":
     unittest.main()

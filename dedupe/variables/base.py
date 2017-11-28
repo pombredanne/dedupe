@@ -15,8 +15,6 @@ class Variable(object) :
 
     def __init__(self, definition) :
 
-        self.weight = 0
-
         if definition.get('has missing', False) :
             self.has_missing = True
             try :
@@ -41,13 +39,13 @@ class MissingDataType(Variable) :
     def __init__(self, name) :
         
         self.name = "(%s: Not Missing)" % name
-        self.weight = 0
 
         self.has_missing = False
 
 class FieldType(Variable) :
     _index_thresholds = []
     _index_predicates = []
+    _Predicate = predicates.SimplePredicate
 
     def __init__(self, definition) :
         self.field = definition['field']
@@ -57,7 +55,7 @@ class FieldType(Variable) :
         else :
             self.name = "(%s: %s)" % (self.field, self.type)
 
-        self.predicates = [predicates.SimplePredicate(pred, self.field) 
+        self.predicates = [self._Predicate(pred, self.field)
                            for pred in self._predicate_functions]
 
         self.predicates += indexPredicates(self._index_predicates,
@@ -81,16 +79,13 @@ class CustomType(FieldType) :
                            "a 'comparator' function in the field "
                            "definition. ")
 
-        if 'variable name' in definition :
-            self.name = definition['variable name'] 
-        else :
+        if 'variable name' not in definition :
             self.name = "(%s: %s, %s)" % (self.field, 
                                           self.type, 
                                           self.comparator.__name__)
 
 
 def allSubclasses(cls) :
-    field_classes = {}
     for q in cls.__subclasses__() :
         yield q.type, q
         for p in allSubclasses(q) :

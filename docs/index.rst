@@ -20,11 +20,21 @@ dedupe takes in human training data and comes up with the best rules for your da
 Important links
 ===============
 
-* Documentation: http://dedupe.rtfd.org/
-* Repository: https://github.com/datamade/dedupe
-* Issues: https://github.com/datamade/dedupe/issues
-* Examples: https://github.com/datamade/dedupe-examples
+* Documentation: https://dedupe.io/developers/library
+* Repository: https://github.com/dedupeio/dedupe
+* Issues: https://github.com/dedupeio/dedupe/issues
+* Mailing list: https://groups.google.com/forum/#!forum/open-source-deduplication
+* Examples: https://github.com/dedupeio/dedupe-examples
 * IRC channel, `#dedupe on irc.freenode.net <http://webchat.freenode.net/?channels=dedupe>`__
+
+Tools built with dedupe
+=======================
+
+`Dedupe.io <https://dedupe.io/>`__
+A full service web service powered by dedupe for de-duplicating and find matches in your messy data. It provides an easy-to-use interface and provides cluster review and automation, as well as advanced record linkage, continuous matching and API integrations. `See the product page <https://dedupe.io/>`__ and the `launch blog post <https://datamade.us/blog/introducing-dedupeio>`__.
+
+`csvdedupe <https://github.com/dedupeio/csvdedupe>`__
+Command line tool for de-duplicating and `linking <https://github.com/dedupeio/csvdedupe#csvlink-usage>`__ CSV files. Read about it on `Source Knight-Mozilla OpenNews <https://source.opennews.org/en-US/articles/introducing-cvsdedupe/>`__.
 
 Contents
 ========
@@ -50,28 +60,13 @@ Features
 Installation
 ============
 
-Dedupe requires `numpy <http://numpy.scipy.org/>`__, which can be
-complicated to install.  If you are installing numpy for the first
-time, `follow these instructions
-<http://docs.scipy.org/doc/numpy/user/install.html>`__. You'll need to
-version 1.6 of numpy or higher.
-
-
 .. code-block:: bash
 
-   pip install "numpy>=1.6"
+   pip install "numpy>=1.9"
    pip install dedupe
 
 Mac OS X Install Notes
 ----------------------
-
-Before installing, you may need to set the following environmental
-variables from the command line
-
-.. code-block:: bash
-
-   export CFLAGS=-Qunused-arguments 
-   export CPPFLAGS=-Qunused-arguments
 
 With default configurations, dedupe cannot do parallel processing on Mac OS X.
 :doc:`Read about instructions on how to enable this <OSX-Install-Notes>`.
@@ -82,30 +77,30 @@ Using dedupe
 Dedupe is a library and not a stand-alone command line tool. To
 demonstrate its usage, we have come up with a `few example recipes for
 different sized datasets for you
-<https://github.com/datamade/dedupe-examples/archive/0.5.zip>`__
-(`repo <https://github.com/datamade/dedupe-examples>`__, as well as
+<https://github.com/dedupeio/dedupe-examples/archive/0.5.zip>`__
+(`repo <https://github.com/dedupeio/dedupe-examples>`__, as well as
 annotated source code:
 
-* `Small data deduplication <http://datamade.github.com/dedupe-examples/docs/csv_example.html>`__
-* `Bigger data deduplication ~700K <http://datamade.github.com/dedupe-examples/docs/mysql_example.html>`__
-* `Record Linkage  <http://datamade.github.com/dedupe-examples/docs/record_linkage_example.html>`__
-* `Postgres <http://datamade.github.io/dedupe-examples/docs/pgsql_example.html>`__
-* `Patent Author Disambiguation <http://datamade.github.io/dedupe-examples/docs/patent_example.html>`__
+* `Small data deduplication <http://dedupeio.github.io/dedupe-examples/docs/csv_example.html>`__
+* `Bigger data deduplication ~700K <http://dedupeio.github.io/dedupe-examples/docs/mysql_example.html>`__
+* `Record Linkage  <http://dedupeio.github.io/dedupe-examples/docs/record_linkage_example.html>`__
+* `Postgres <http://dedupeio.github.io/dedupe-examples/docs/pgsql_example.html>`__
+* `Patent Author Disambiguation <http://dedupeio.github.io/dedupe-examples/docs/patent_example.html>`__
 
 Errors / Bugs
 =============
 
 If something is not behaving intuitively, it is a bug, and should be
-reported. `Report it here <https://github.com/datamade/dedupe/issues>`__
+reported. `Report it here <https://github.com/dedupeio/dedupe/issues>`__
 
 Contributing to dedupe
 ======================
 
-Check out `dedupe <https://github.com/datamade/dedupe>`__
+Check out `dedupe <https://github.com/dedupeio/dedupe>`__
 repo for how to contribute to the library.
 
 Check out `dedupe-examples
-<https://github.com/datamade/dedupe-examples>`__ for how to contribute
+<https://github.com/dedupeio/dedupe-examples>`__ for how to contribute
 a useful example of using dedupe.
 
 Citing dedupe
@@ -113,7 +108,7 @@ Citing dedupe
 
 If you use Dedupe in an academic work, please give this citation:
 
-Gregg, Forest and Derek Eder. 2015. Dedupe. https://github.com/datamade/dedupe.
+Gregg, Forest and Derek Eder. 2015. Dedupe. https://github.com/dedupeio/dedupe.
 
 
 Indices and tables
